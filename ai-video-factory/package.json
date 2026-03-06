@@ -1,0 +1,19 @@
+{
+  "name": "ai-video-factory",
+  "version": "1.0.0",
+  "description": "AI-powered video generation pipeline",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "cli": "node index.js"
+  },
+  "dependencies": {
+    "@browserbasehq/sdk": "^2.7.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "fs-extra": "^11.2.0",
+    "playwright": "^1.49.0",
+    "ws": "^8.18.0"
+  }
+}

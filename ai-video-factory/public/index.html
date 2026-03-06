@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Video Factory</title>
+  <style>
+    :root {
+      --bg: #0f0f12;
+      --surface: #1a1a1f;
+      --surface-hover: #222228;
+      --border: #2a2a32;
+      --text: #e8e8ed;
+      --text-muted: #8a8a96;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --success: #22c55e;
+      --error: #ef4444;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin: 0 0 1.5rem;
+      letter-spacing: -0.02em;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 2rem;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.9375rem;
+    }
+
+    input[type="text"]::placeholder {
+      color: var(--text-muted);
+    }
+
+    input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    button {
+      padding: 0.75rem 1.5rem;
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: white;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    button:hover {
+      background: var(--accent-hover);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .progress-section {
+      margin-bottom: 2rem;
+    }
+
+    .progress-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .progress-bar {
+      flex: 1;
+      height: 6px;
+      background: var(--surface);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), #8b5cf6);
+      border-radius: 3px;
+      width: 0%;
+      transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .elapsed-timer {
+      font-size: 0.875rem;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-muted);
+      min-width: 3.5rem;
+    }
+
+    .pipeline-nodes {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: space-between;
+    }
+
+    .pipeline-nodes .node {
+      flex: 1;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      transition: background 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .pipeline-nodes .node.active {
+      background: var(--accent);
+      box-shadow: 0 0 8px rgba(99, 102, 241, 0.5);
+      animation: node-pulse 1.5s ease-in-out infinite;
+    }
+
+    .pipeline-nodes .node.complete {
+      background: var(--success);
+    }
+
+    .pipeline-nodes .node.failed {
+      background: var(--error);
+    }
+
+    @keyframes node-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    .pipeline {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 1rem;
+      padding: 1rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .step:last-child {
+      border-bottom: none;
+    }
+
+    .step-icon {
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    .check {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--success);
+      color: white;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: check-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .step-icon .fail {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--error);
+      color: white;
+      font-size: 12px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      animation: check-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .step-icon .fail:not(.hidden) {
+      display: flex;
+    }
+
+    @keyframes check-pop {
+      0% { transform: scale(0); opacity: 0; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    .step-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .step-title {
+      font-weight: 500;
+      font-size: 0.9375rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .step-data {
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+      max-height: 200px;
+      overflow-y: auto;
+      background: var(--bg);
+      padding: 0.75rem;
+      border-radius: 6px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .step-data:empty {
+      display: none;
+    }
+
+    .step-data pre {
+      margin: 0;
+      font-size: 0.75rem;
+    }
+
+    .error-display {
+      padding: 0.75rem 1rem;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid var(--error);
+      border-radius: 8px;
+      color: var(--error);
+      font-size: 0.875rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .step-data pre,
+    .step-data .thumb-grid,
+    .step-data video,
+    .step-data audio {
+      animation: fade-in 0.4s ease-out forwards;
+    }
+
+    .step-data video, .step-data audio {
+      max-width: 100%;
+      margin-top: 0.5rem;
+    }
+
+    .step-data a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .step-data a:hover {
+      text-decoration: underline;
+    }
+
+    .step.failed .step-title {
+      color: var(--error);
+    }
+
+    .step.failed .step-icon .spinner,
+    .step.failed .step-icon .check {
+      display: none !important;
+    }
+
+    .step.failed .step-icon .fail {
+      display: flex !important;
+    }
+
+    .fade-in {
+      animation: fade-in 0.4s ease-out forwards;
+    }
+
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .step-data .thumb-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+
+    .step-data .thumb-grid img {
+      width: 100%;
+      aspect-ratio: 1;
+      object-fit: cover;
+      border-radius: 6px;
+      animation: fade-in 0.35s ease-out forwards;
+    }
+
+    .step-data .thumb-grid img:nth-child(1) { animation-delay: 0.02s; }
+    .step-data .thumb-grid img:nth-child(2) { animation-delay: 0.04s; }
+    .step-data .thumb-grid img:nth-child(3) { animation-delay: 0.06s; }
+    .step-data .thumb-grid img:nth-child(4) { animation-delay: 0.08s; }
+    .step-data .thumb-grid img:nth-child(5) { animation-delay: 0.1s; }
+    .step-data .thumb-grid img:nth-child(n+6) { animation-delay: 0.12s; }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>AI Video Factory</h1>
+
+    <div class="form-row">
+      <input type="text" id="theme" placeholder="Enter theme (e.g. sunset over mountains)" />
+      <button id="generate" type="button">Generate Video</button>
+    </div>
+
+    <div class="progress-section hidden" id="progressSection">
+      <div class="progress-header">
+        <div class="progress-bar" id="progressBar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="elapsed-timer" id="elapsedTimer">0:00</div>
+      </div>
+      <div class="pipeline-nodes" id="pipelineNodes">
+        <div class="node" data-stage="gpt"></div>
+        <div class="node" data-stage="images"></div>
+        <div class="node" data-stage="video"></div>
+        <div class="node" data-stage="audio"></div>
+        <div class="node" data-stage="final"></div>
+      </div>
+    </div>
+
+    <div id="errorDisplay" class="error-display hidden"></div>
+
+    <div class="pipeline">
+      <div class="step" data-stage="gpt">
+        <div class="step-icon"><div class="spinner hidden" id="spinner-gpt"></div><span class="check hidden" id="check-gpt">✓</span><span class="fail hidden" id="fail-gpt">✕</span></div>
+        <div class="step-content">
+          <div class="step-title">GPT JSON</div>
+          <div class="step-data" id="data-gpt"></div>
+        </div>
+      </div>
+      <div class="step" data-stage="images">
+        <div class="step-icon"><div class="spinner hidden" id="spinner-images"></div><span class="check hidden" id="check-images">✓</span><span class="fail hidden" id="fail-images">✕</span></div>
+        <div class="step-content">
+          <div class="step-title">Images</div>
+          <div class="step-data" id="data-images"></div>
+        </div>
+      </div>
+      <div class="step" data-stage="video">
+        <div class="step-icon"><div class="spinner hidden" id="spinner-video"></div><span class="check hidden" id="check-video">✓</span><span class="fail hidden" id="fail-video">✕</span></div>
+        <div class="step-content">
+          <div class="step-title">Video</div>
+          <div class="step-data" id="data-video"></div>
+        </div>
+      </div>
+      <div class="step" data-stage="audio">
+        <div class="step-icon"><div class="spinner hidden" id="spinner-audio"></div><span class="check hidden" id="check-audio">✓</span><span class="fail hidden" id="fail-audio">✕</span></div>
+        <div class="step-content">
+          <div class="step-title">Audio</div>
+          <div class="step-data" id="data-audio"></div>
+        </div>
+      </div>
+      <div class="step" data-stage="final">
+        <div class="step-icon"><div class="spinner hidden" id="spinner-final"></div><span class="check hidden" id="check-final">✓</span><span class="fail hidden" id="fail-final">✕</span></div>
+        <div class="step-content">
+          <div class="step-title">Final Video</div>
+          <div class="step-data" id="data-final"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
