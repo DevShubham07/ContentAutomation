@@ -1,126 +1,148 @@
 import path from "node:path";
 import fs from "fs-extra";
-import { retry } from "../utils/retry.js";
 import { humanDelay } from "../utils/delay.js";
-import { waitForNetworkIdle } from "../utils/networkIdle.js";
-import { classifyStepError, inferLoginRequired } from "../utils/stepGuards.js";
 
 const STEP_NAME = "generateImages";
-const GROK_IMAGINE_URL = "https://grok.com/imagine";
+const GEMINI_URL = "https://gemini.google.com/app";
 const FRAMES_DIR = "./assets/frames";
-
-// How many frames to generate at a time (Grok generates 4 images per prompt)
 const GENERATION_TIMEOUT_MS = 120_000;
-
-// -- Selectors matching the actual Grok /imagine UI --
-const SELECTORS = {
-  // Prompt input — Grok uses a tiptap contenteditable div
-  promptInput: ".tiptap, div[contenteditable='true'], textarea",
-  // Submit button
-  submitButton: "button[aria-label='Submit'], button[type='submit']",
-  // Redo button signals generation is complete
-  redoButton: "text=Redo",
-  // Progress indicator
-  progressIndicator: "div.tabular-nums",
-};
 
 function formatFrameIndex(index) {
   return String(index).padStart(4, "0");
 }
 
 /**
- * Fill the prompt in a contenteditable div or textarea.
- * For tiptap (contenteditable), we use JS injection since .fill() doesn't work
- * reliably on contenteditable divs.
+ * Wait for Gemini to finish generating images in the response.
  */
-async function fillPromptInput(page, promptInput, text) {
-  await promptInput.focus();
-  await promptInput.evaluate((el, value) => {
-    if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
-      el.value = value;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    } else {
-      // contenteditable div (tiptap)
-      el.innerText = value;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-  }, text);
-}
-
-/**
- * Wait for image generation to complete on Grok.
- * Detection:
- *  1. "Redo" button appears → definitive signal
- *  2. Progress indicator disappears after being visible → done
- *  3. Timeout fallback
- */
-async function waitForGenerationComplete(page, timeoutMs = GENERATION_TIMEOUT_MS) {
+async function waitForGeminiResponse(page, timeoutMs = GENERATION_TIMEOUT_MS) {
   const start = Date.now();
   const POLL_MS = 3_000;
-  let sawProgress = false;
 
-  console.log(`[${STEP_NAME}] Polling for generation completion...`);
+  console.log(`[${STEP_NAME}] Waiting for Gemini response...`);
 
   while (Date.now() - start < timeoutMs) {
-    // Check 1: Redo button is definitive
-    try {
-      const redoBtn = page.getByText("Redo", { exact: true });
-      if (await redoBtn.isVisible().catch(() => false)) {
-        console.log(`[${STEP_NAME}] "Redo" button appeared — generation complete.`);
-        return;
-      }
-    } catch { }
+    const result = await page.evaluate(() => {
+      // Look for images in the page that are likely generated content
+      const imgs = document.querySelectorAll("img");
+      let foundGenerated = false;
 
-    // Check 2: Track progress indicator
-    try {
-      const pctEl = page.locator(SELECTORS.progressIndicator).first();
-      if (await pctEl.isVisible().catch(() => false)) {
-        const pctText = await pctEl.innerText().catch(() => "");
-        sawProgress = true;
-        console.log(`[${STEP_NAME}]   Progress: ${pctText}`);
-      } else if (sawProgress) {
-        console.log(`[${STEP_NAME}] Progress indicator disappeared — generation likely complete.`);
-        return;
+      for (const img of imgs) {
+        const src = img.src || "";
+        // Skip small images (icons, avatars, logos)
+        if (img.naturalWidth < 100 || img.naturalHeight < 100) continue;
+        // Skip known UI images
+        if (src.includes("avatar") || src.includes("icon") || src.includes("logo")) continue;
+        if (src.includes("data:image/svg")) continue;
+        // Generated images are typically from Google CDN
+        if (
+          src.includes("googleusercontent.com") ||
+          src.includes("gstatic.com") ||
+          src.includes("ggpht.com") ||
+          src.includes("lh3.google") ||
+          (img.naturalWidth >= 200 && img.naturalHeight >= 200)
+        ) {
+          foundGenerated = true;
+        }
       }
-    } catch { }
 
+      // Check if Gemini refused
+      const bodyText = document.body.innerText || "";
+      if (
+        bodyText.includes("I can't generate") ||
+        bodyText.includes("I'm not able to generate") ||
+        bodyText.includes("unable to create")
+      ) {
+        return "refused";
+      }
+
+      return foundGenerated ? "done" : "waiting";
+    });
+
+    if (result === "refused") {
+      throw new Error("Gemini refused to generate the image");
+    }
+    if (result === "done") {
+      console.log(`[${STEP_NAME}] Image found in response.`);
+      await humanDelay(3000, 5000);
+      return;
+    }
+
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    if (elapsed % 15 === 0 && elapsed > 0) {
+      console.log(`[${STEP_NAME}]   Still generating... (${elapsed}s)`);
+    }
     await new Promise((r) => setTimeout(r, POLL_MS));
   }
 
-  console.warn(`[${STEP_NAME}] Generation wait timed out after ${timeoutMs / 1000}s — attempting extraction anyway.`);
+  console.warn(`[${STEP_NAME}] Timed out after ${timeoutMs / 1000}s`);
 }
 
 /**
- * Extract generated image URLs from the page.
- * Grok serves generated images from assets.grok.com.
- * We look for <img> elements whose src contains "assets.grok.com".
+ * Extract the best (largest) generated image URL from the page.
  */
-async function extractGeneratedImageUrls(page) {
+async function extractImageUrl(page) {
   return page.evaluate(() => {
     const imgs = document.querySelectorAll("img");
-    const urls = [];
+    let bestUrl = null;
+    let bestSize = 0;
+
     for (const img of imgs) {
       const src = img.src || "";
-      if (src.includes("assets.grok.com") && !urls.includes(src)) {
-        urls.push(src);
+      if (img.naturalWidth < 100 || img.naturalHeight < 100) continue;
+      if (src.includes("avatar") || src.includes("icon") || src.includes("logo")) continue;
+      if (src.includes("data:image/svg")) continue;
+
+      const size = img.naturalWidth * img.naturalHeight;
+      if (size > bestSize) {
+        bestSize = size;
+        bestUrl = src;
       }
     }
-    return urls;
+    return bestUrl;
   });
 }
 
 /**
- * Download an image from a URL using Playwright's request context.
+ * Download image. Bypasses CORS by using Playwright's request context,
+ * with a fallback to screenshotting the DOM element directly.
  */
-async function downloadImage(context, url, destPath) {
-  const response = await context.request.get(url);
-  if (response.status() !== 200) {
-    throw new Error(`HTTP ${response.status()} downloading ${url.slice(0, 80)}`);
+async function downloadImage(page, url, destPath) {
+  try {
+    // Attempt 1: Node.js side request (bypasses page CORS)
+    const response = await page.context().request.get(url);
+    if (response.ok()) {
+      const buffer = await response.body();
+      await fs.writeFile(destPath, buffer);
+      return buffer.length;
+    }
+  } catch (err) {
+    console.warn(`[${STEP_NAME}] Context request failed, falling back to screenshot: ${err.message}`);
   }
-  const buffer = await response.body();
-  await fs.writeFile(destPath, buffer);
-  return buffer.length;
+
+  // Attempt 2: Screenshot the element directly from the page
+  console.log(`[${STEP_NAME}] Taking element screenshot fallback...`);
+  const imgHandle = await page.evaluateHandle((src) => {
+    return Array.from(document.querySelectorAll("img")).find((i) => i.src === src);
+  }, url);
+
+  if (!imgHandle) {
+    throw new Error("Could not find generated image element in DOM.");
+  }
+
+  await imgHandle.screenshot({ path: destPath });
+  await imgHandle.dispose();
+  const stat = await fs.stat(destPath);
+  return stat.size;
 }
+
+/**
+ * Generate images using Gemini via the local system Chrome.
+ * Uses the `context` provided by the pipeline which is already connected
+ * to the logged-in Chrome instance on port 9222.
+ */
+import { getOrReusePage } from "../utils/browser.js";
+
+// ... [existing imports] ...
 
 export async function generateImages(context, frames) {
   if (!context || !Array.isArray(frames) || frames.length === 0) {
@@ -130,101 +152,100 @@ export async function generateImages(context, frames) {
   const framesDir = path.resolve(process.cwd(), FRAMES_DIR);
   await fs.ensureDir(framesDir);
 
-  let globalFrameIndex = 0;
+  const page = await getOrReusePage(context, "https://gemini.google.com");
+  try {
+    console.log(`[${STEP_NAME}] Navigating to Gemini...`);
+    await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await humanDelay(3000, 5000);
 
-  // Process frames one prompt at a time.
-  // Grok generates multiple images per prompt — we pick the first (best match)
-  // and use it for the frame.
-  for (let i = 0; i < frames.length; i++) {
-    const prompt = frames[i];
-    const filename = `frame_${formatFrameIndex(i)}.png`;
-    const destPath = path.join(framesDir, filename);
+    for (let i = 0; i < frames.length; i++) {
+      const prompt = frames[i];
+      const filename = `frame_${formatFrameIndex(i)}.png`;
+      const destPath = path.join(framesDir, filename);
 
-    // Skip if already generated (resume support)
-    if (await fs.pathExists(destPath)) {
-      console.log(`[${STEP_NAME}] Frame ${i + 1}/${frames.length} already exists, skipping.`);
-      continue;
-    }
+      if (await fs.pathExists(destPath)) {
+        console.log(`[${STEP_NAME}] Frame ${i + 1}/${frames.length} exists, skipping.`);
+        continue;
+      }
 
-    await retry(async () => {
-      const page = await context.newPage();
+      console.log(`[${STEP_NAME}] Frame ${i + 1}/${frames.length}...`);
 
-      try {
-        console.log(`[${STEP_NAME}] Generating frame ${i + 1}/${frames.length}...`);
+      // Check if logged in — look for the prompt input
+      const inputSelectors = [
+        "div.ql-editor",
+        "rich-textarea div[contenteditable='true']",
+        "div[contenteditable='true']",
+        "textarea",
+      ];
 
-        // Navigate to Grok /imagine
-        await page.goto(GROK_IMAGINE_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
-        await waitForNetworkIdle(page, 15_000);
-        await humanDelay(2000, 4000);
-
-        // Wait for the prompt input to appear
-        const promptInput = page.locator(SELECTORS.promptInput).first();
+      let promptInput = null;
+      for (const sel of inputSelectors) {
+        const el = page.locator(sel).first();
         try {
-          await promptInput.waitFor({ state: "visible", timeout: 30_000 });
-        } catch (err) {
-          const loginRequired = await inferLoginRequired(page);
-          if (loginRequired) {
-            throw new Error("Login required on Grok (prompt input not available)");
-          }
-          throw err;
-        }
-        await humanDelay(500, 1000);
-
-        // Fill the prompt using JS injection (works with tiptap contenteditable)
-        await fillPromptInput(page, promptInput, prompt);
-        await humanDelay(500, 1000);
-
-        // Submit via Enter key (primary) + fallback to submit button click
-        console.log(`[${STEP_NAME}] Submitting prompt...`);
-        await page.keyboard.press("Enter");
-        await humanDelay(1000, 2000);
-
-        // Fallback: click submit button if still visible
-        try {
-          const submitBtn = page.locator(SELECTORS.submitButton).last();
-          if (await submitBtn.isVisible().catch(() => false) && await submitBtn.isEnabled().catch(() => false)) {
-            console.log(`[${STEP_NAME}] Clicking submit button as fallback...`);
-            await submitBtn.click();
+          if (await el.isVisible({ timeout: 5000 })) {
+            promptInput = el;
+            break;
           }
         } catch { }
-
-        // Wait for navigation (Grok navigates to /imagine/post/... after submission)
-        try {
-          await page.waitForURL("**/imagine/**", { timeout: 15_000 });
-          console.log(`[${STEP_NAME}] Navigated to: ${page.url()}`);
-        } catch {
-          console.log(`[${STEP_NAME}] URL unchanged: ${page.url()} — proceeding anyway.`);
-        }
-        await humanDelay(2000, 3000);
-
-        // Wait for generation to complete
-        await waitForGenerationComplete(page, GENERATION_TIMEOUT_MS);
-        await humanDelay(3000, 5000);
-
-        // Extract generated image URLs
-        const imageUrls = await extractGeneratedImageUrls(page);
-        console.log(`[${STEP_NAME}] Found ${imageUrls.length} generated image(s).`);
-
-        if (imageUrls.length === 0) {
-          throw new Error("No generated images found on the page");
-        }
-
-        // Download the first generated image (best match for the prompt)
-        const url = imageUrls[0];
-        console.log(`[${STEP_NAME}] Downloading image from: ${url.slice(0, 80)}...`);
-        const bytes = await downloadImage(context, url, destPath);
-        console.log(`[${STEP_NAME}] Frame ${i + 1} saved: ${filename} (${bytes} bytes)`);
-
-      } catch (err) {
-        const msg = classifyStepError(STEP_NAME, err);
-        throw new Error(`${msg} (frame ${i + 1})`);
-      } finally {
-        await page.close();
       }
-    }, 3, 3000);
 
-    if (i < frames.length - 1) {
-      await humanDelay(2000, 4000);
+      if (!promptInput) {
+        throw new Error(
+          `LOGIN_REQUIRED: Log into Google in your local Chrome first. Run: npm run login`
+        );
+      }
+
+      // Type prompt
+      const fullPrompt = `Generate an image of: ${prompt}`;
+      console.log(`[${STEP_NAME}] Prompt: ${fullPrompt.slice(0, 80)}...`);
+
+      await promptInput.focus();
+      await promptInput.evaluate((el, text) => {
+        if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
+          el.value = text;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        } else {
+          el.innerText = text;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }, fullPrompt);
+      await humanDelay(500, 1000);
+
+      // Send
+      const sendBtnSelectors = [
+        "button[aria-label='Send message']",
+        "button[aria-label='Send']",
+        "button.send-button",
+        ".send-button-container button",
+      ];
+      let sent = false;
+      for (const sel of sendBtnSelectors) {
+        const btn = page.locator(sel).first();
+        try {
+          if (await btn.isVisible({ timeout: 2000 }) && await btn.isEnabled()) {
+            await btn.click();
+            sent = true;
+            break;
+          }
+        } catch { }
+      }
+      if (!sent) await page.keyboard.press("Enter");
+
+      await humanDelay(2000, 3000);
+
+      // Wait for generation
+      await waitForGeminiResponse(page, GENERATION_TIMEOUT_MS);
+
+      // Extract and download image
+      const imageUrl = await extractImageUrl(page);
+      if (!imageUrl) throw new Error("No image found in Gemini response");
+
+      const bytes = await downloadImage(page, imageUrl, destPath);
+      console.log(`[${STEP_NAME}] ✅ Frame ${i + 1}: ${filename} (${bytes} bytes)`);
+
+      if (i < frames.length - 1) await humanDelay(3000, 5000);
     }
+  } finally {
+    await page.close();
   }
 }

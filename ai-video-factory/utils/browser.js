@@ -47,40 +47,79 @@ function shouldUseLocalBrowser() {
   return TRUE_VALUES.has(raw.trim().toLowerCase());
 }
 
-async function launchLocalBrowser() {
-  const headlessRaw = process.env.LOCAL_HEADLESS;
-  const headless = typeof headlessRaw === "string" ? TRUE_VALUES.has(headlessRaw.trim().toLowerCase()) : false;
-  const slowMoRaw = process.env.BROWSERBASE_SLOWMO ?? process.env.SLOWMO ?? process.env.LOCAL_SLOWMO;
-  const slowMo = slowMoRaw != null ? Number(slowMoRaw) : undefined;
+import { spawn } from "node:child_process";
 
+// ... [existing imports stay as they are, replace starts below] ...
+
+async function launchLocalBrowser() {
   await fs.ensureDir(LOCAL_USER_DATA_DIR);
 
-  console.log("[Local Playwright] Launching stealth Chromium with persistent profile...");
-  console.log(`[Local Playwright] User data dir: ${LOCAL_USER_DATA_DIR}`);
+  console.log("[Local] Connecting to system Chrome on port 9222...");
+  console.log(`[Local] User data dir: ${LOCAL_USER_DATA_DIR}`);
 
-  const context = await chromium.launchPersistentContext(LOCAL_USER_DATA_DIR, {
-    headless,
-    ...(Number.isFinite(slowMo) && slowMo >= 0 ? { slowMo } : {}),
-    acceptDownloads: true,
-    args: [
-      "--disable-blink-features=AutomationControlled",
+  const cdpUrl = "http://127.0.0.1:9222";
+  let browser;
+
+  try {
+    // Try to connect to an already running Chrome (left open by login.js)
+    browser = await vanillaChromium.connectOverCDP(cdpUrl);
+    console.log("[Local] Connected to existing Chrome instance.");
+  } catch (err) {
+    console.log("[Local] Chrome not running on 9222. Launching it now...");
+
+    // Find native Chrome
+    const CHROME_PATHS = [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ];
+    let executablePath = undefined;
+    for (const p of CHROME_PATHS) {
+      if (fs.existsSync(p)) {
+        executablePath = p;
+        break;
+      }
+    }
+
+    if (!executablePath) throw new Error("Chrome not found for local launch.");
+
+    // Launch Chrome directly via spawn, NOT Playwright.
+    // Playwright's launcher wrappers break native Chrome profiles.
+    const chromeArgs = [
+      `--user-data-dir=${LOCAL_USER_DATA_DIR}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--remote-debugging-port=9222",
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-infobars",
-      "--window-size=1280,800",
-    ],
-    viewport: { width: 1280, height: 800 },
-    locale: "en-US",
-    timezoneId: "America/New_York",
-    userAgent:
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    ignoreDefaultArgs: ["--enable-automation"],
+      "--window-size=1280,800"
+    ];
+
+    const cp = spawn(executablePath, chromeArgs, {
+      detached: true,
+      stdio: "ignore",
+    });
+    cp.unref();
+
+    // Give Chrome a moment to start the debugging server
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Connect via CDP
+    browser = await vanillaChromium.connectOverCDP(cdpUrl);
+    console.log("[Local] Launched and connected to new Chrome instance.");
+  }
+
+  // Get the default context that has the user data dir loaded
+  const context = browser.contexts()[0];
+
+  // Apply stealth patches
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    window.chrome = { runtime: {}, loadTimes: () => { }, csi: () => { } };
   });
 
-  console.log("[Local Playwright] Browser launched successfully (stealth + persistent context).");
-
   return {
-    browser: null,
+    browser,
     context,
     sessionId: null,
     replayUrl: null,
@@ -181,7 +220,7 @@ export async function launchBrowser() {
     context = await browser.newContext({ acceptDownloads: true });
   } catch (err) {
     console.error("Failed to create browser context:", err.message);
-    await browser.close().catch(() => {});
+    await browser.close().catch(() => { });
     throw err;
   }
 
@@ -206,7 +245,7 @@ export async function launchBrowser() {
       liveUrl = live.debuggerFullscreenUrl;
       console.log(`[Browserbase] Live debugger: ${liveUrl}`);
     }
-  } catch (_) {}
+  } catch (_) { }
 
   return {
     browser,
@@ -218,7 +257,7 @@ export async function launchBrowser() {
   };
 }
 
-export function closeBrowser() {}
+export function closeBrowser() { }
 
 export async function releaseBrowserbaseSession(sessionId) {
   if (!sessionId || typeof sessionId !== "string") return false;
@@ -235,4 +274,24 @@ export async function releaseBrowserbaseSession(sessionId) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Finds an existing page/tab in the context that matches the given URL prefix.
+ * If found, brings it to the front and returns it.
+ * Otherwise, creates a new page.
+ */
+export async function getOrReusePage(context, urlPrefix) {
+  const pages = context.pages();
+  for (const p of pages) {
+    if (p.url().startsWith(urlPrefix)) {
+      try {
+        await p.bringToFront();
+        return p;
+      } catch {
+        // Ignore errors if tab was closed during iteration
+      }
+    }
+  }
+  return await context.newPage();
 }

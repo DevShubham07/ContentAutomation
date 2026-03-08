@@ -1,7 +1,7 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
 import fs from "fs-extra";
-import { launchBrowser, releaseBrowserbaseSession } from "../utils/browser.js";
+import { launchBrowser, releaseBrowserbaseSession, getOrReusePage } from "../utils/browser.js";
 import { humanDelay } from "../utils/delay.js";
 import { generatePlan } from "../steps/generatePlan.js";
 import { generateImages } from "../steps/generateImages.js";
@@ -62,7 +62,7 @@ export async function runPipeline(jobId, theme, broadcast) {
 
   const cleanup = async () => {
     const close = async (obj) => {
-      if (obj) await obj.close().catch(() => {});
+      if (obj) await obj.close().catch(() => { });
     };
     // Only close separate contexts if they differ from the main browserContext
     if (grokContext && grokContext !== browserContext) await close(grokContext);
@@ -93,11 +93,11 @@ export async function runPipeline(jobId, theme, broadcast) {
     if (page) {
       try {
         url = page.url();
-      } catch {}
+      } catch { }
       try {
         screenshotPath = path.join(diagnosticsDir, `${jobId}_${step}_a${attempt}_${stamp}.png`);
         await page.screenshot({ path: screenshotPath, fullPage: true });
-      } catch {}
+      } catch { }
     }
 
     appendJobDiagnostic(jobId, {
@@ -279,7 +279,7 @@ export async function runPipeline(jobId, theme, broadcast) {
       spawn("open", [liveUrl], { detached: true, stdio: "ignore" }).unref();
     }
 
-    const gptPage = await browserContext.newPage();
+    const gptPage = await getOrReusePage(browserContext, "https://chatgpt.com");
     // For local persistent context (no separate browser object), reuse the same context.
     // For Browserbase (has browser object), create separate contexts per service.
     grokContext = browser ? await browser.newContext({ acceptDownloads: true }) : browserContext;

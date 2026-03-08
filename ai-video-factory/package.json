@@ -7,10 +7,14 @@
   "scripts": {
     "start": "node --watch server.js",
     "cli": "node index.js",
+    "login": "node scripts/login.js",
+    "login:bb": "node scripts/login-bb.js",
     "setup:context": "node scripts/setup-context.js"
   },
   "dependencies": {
     "@browserbasehq/sdk": "^2.7.0",
+    "@google/genai": "^1.44.0",
+    "@google/generative-ai": "^0.24.1",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "fs-extra": "^11.2.0",

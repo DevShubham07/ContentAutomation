@@ -31,6 +31,10 @@ async function waitForSpinnersGone(page, timeoutMs = 30_000) {
   }
 }
 
+import { getOrReusePage } from "../utils/browser.js";
+
+// ... [existing code] ...
+
 export async function generateAudio(context, narrationText) {
   if (!context || !narrationText || typeof narrationText !== "string") {
     throw new Error("context and narrationText (non-empty string) are required");
@@ -41,7 +45,7 @@ export async function generateAudio(context, narrationText) {
   await fs.ensureDir(audioDir);
 
   return retry(async () => {
-    const page = await context.newPage();
+    const page = await getOrReusePage(context, "https://elevenlabs.io");
 
     try {
       console.log(`[${STEP_NAME}] Navigating to ${ELEVENLABS_URL}...`);

@@ -60,13 +60,17 @@ function mergeVideoSegments(segments, outputPath) {
     let stderr = "";
     proc.stderr?.on("data", (d) => { stderr += d.toString(); });
     proc.on("close", (code) => {
-      fs.removeSync(listPath).catch(() => {});
+      fs.removeSync(listPath).catch(() => { });
       if (code === 0) return resolve();
       reject(new Error(`ffmpeg failed: ${stderr.slice(-500)}`));
     });
     proc.on("error", reject);
   });
 }
+
+import { getOrReusePage } from "../utils/browser.js";
+
+// ... [existing code] ...
 
 export async function createVideo(context) {
   if (!context) {
@@ -85,7 +89,7 @@ export async function createVideo(context) {
   await fs.ensureDir(videoDir);
 
   return retry(async () => {
-    const page = await context.newPage();
+    const page = await getOrReusePage(context, "https://labs.google");
 
     try {
       console.log(`[${STEP_NAME}] Navigating to ${FLOW_URL}...`);
@@ -166,7 +170,7 @@ export async function createVideo(context) {
       await mergeVideoSegments(segmentPaths, outputPath);
 
       for (const seg of segmentPaths) {
-        fs.remove(seg).catch(() => {});
+        fs.remove(seg).catch(() => { });
       }
     } catch (err) {
       throw new Error(classifyStepError(STEP_NAME, err));
