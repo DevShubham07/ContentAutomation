@@ -17,7 +17,9 @@ export function classifyStepError(stepName, err) {
     lower.includes("timeout") ||
     lower.includes("net::") ||
     lower.includes("selector") ||
-    lower.includes("target page, context or browser has been closed")
+    lower.includes("target page, context or browser has been closed") ||
+    lower.includes("human verification") ||
+    lower.includes("cloudflare")
   ) {
     return `[${stepName}] TEMPORARY_SITE_ISSUE: ${msg}`;
   }

@@ -1,9 +1,15 @@
-import { chromium } from "playwright";
+import { chromium } from "playwright-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import { chromium as vanillaChromium } from "playwright";
 import Browserbase from "@browserbasehq/sdk";
 import path from "node:path";
 import fs from "fs-extra";
 
+chromium.use(StealthPlugin());
+
 const CONTEXT_CACHE_PATH = path.resolve(process.cwd(), ".browserbase-context.json");
+const LOCAL_USER_DATA_DIR = path.resolve(process.cwd(), ".local-browser-data");
+const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 
 function getBrowserbaseConfig() {
   const apiKey = process.env.BROWSERBASE_API_KEY || process.env.browser_token;
@@ -35,7 +41,59 @@ async function writeCachedContextId(contextId) {
   );
 }
 
+function shouldUseLocalBrowser() {
+  const raw = process.env.USE_LOCAL_PLAYWRIGHT;
+  if (typeof raw !== "string") return false;
+  return TRUE_VALUES.has(raw.trim().toLowerCase());
+}
+
+async function launchLocalBrowser() {
+  const headlessRaw = process.env.LOCAL_HEADLESS;
+  const headless = typeof headlessRaw === "string" ? TRUE_VALUES.has(headlessRaw.trim().toLowerCase()) : false;
+  const slowMoRaw = process.env.BROWSERBASE_SLOWMO ?? process.env.SLOWMO ?? process.env.LOCAL_SLOWMO;
+  const slowMo = slowMoRaw != null ? Number(slowMoRaw) : undefined;
+
+  await fs.ensureDir(LOCAL_USER_DATA_DIR);
+
+  console.log("[Local Playwright] Launching stealth Chromium with persistent profile...");
+  console.log(`[Local Playwright] User data dir: ${LOCAL_USER_DATA_DIR}`);
+
+  const context = await chromium.launchPersistentContext(LOCAL_USER_DATA_DIR, {
+    headless,
+    ...(Number.isFinite(slowMo) && slowMo >= 0 ? { slowMo } : {}),
+    acceptDownloads: true,
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-infobars",
+      "--window-size=1280,800",
+    ],
+    viewport: { width: 1280, height: 800 },
+    locale: "en-US",
+    timezoneId: "America/New_York",
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    ignoreDefaultArgs: ["--enable-automation"],
+  });
+
+  console.log("[Local Playwright] Browser launched successfully (stealth + persistent context).");
+
+  return {
+    browser: null,
+    context,
+    sessionId: null,
+    replayUrl: null,
+    liveUrl: null,
+    contextId: null,
+  };
+}
+
 export async function launchBrowser() {
+  if (shouldUseLocalBrowser()) {
+    return launchLocalBrowser();
+  }
+
   const { apiKey, projectId } = getBrowserbaseConfig();
   const timeoutRaw = process.env.BROWSERBASE_SESSION_TIMEOUT_SEC;
   const sessionTimeout = Number.isFinite(Number(timeoutRaw))
@@ -43,7 +101,7 @@ export async function launchBrowser() {
     : 30 * 60;
   const envContextId = process.env.BROWSERBASE_CONTEXT_ID?.trim() || null;
   const cachedContextId = await readCachedContextId();
-  const contextId = envContextId || cachedContextId;
+  let contextId = envContextId || cachedContextId;
 
   if (!apiKey || typeof apiKey !== "string" || apiKey.trim() === "") {
     throw new Error(
@@ -59,6 +117,20 @@ export async function launchBrowser() {
 
   const bb = new Browserbase({ apiKey });
 
+  if (!contextId) {
+    console.log("[Browserbase] No context ID found. Creating a new context for login persistence...");
+    try {
+      const ctx = await bb.contexts.create({ projectId: projectId.trim() });
+      contextId = ctx?.id;
+      if (contextId) {
+        await writeCachedContextId(contextId);
+        console.log("[Browserbase] New context created.");
+      }
+    } catch (err) {
+      console.warn("[Browserbase] Could not create context:", err?.message || err);
+    }
+  }
+
   let session;
   try {
     session = await bb.sessions.create({
@@ -72,6 +144,11 @@ export async function launchBrowser() {
   } catch (err) {
     const msg = err.message || String(err);
     console.error("Failed to create Browserbase session:", msg);
+    const lower = msg.toLowerCase();
+    if (lower.includes("max concurrent sessions limit") || lower.includes("burst rate limit") || lower.includes("429")) {
+      console.warn("[Browserbase] Limits reached. Falling back to local stealth browser.");
+      return launchLocalBrowser();
+    }
     throw err;
   }
 
@@ -89,7 +166,7 @@ export async function launchBrowser() {
 
   let browser;
   try {
-    browser = await chromium.connectOverCDP(connectUrl, connectOptions);
+    browser = await vanillaChromium.connectOverCDP(connectUrl, connectOptions);
   } catch (err) {
     const msg = err.message || String(err);
     if (msg.includes("timeout") || err.name === "TimeoutError") {
@@ -129,9 +206,7 @@ export async function launchBrowser() {
       liveUrl = live.debuggerFullscreenUrl;
       console.log(`[Browserbase] Live debugger: ${liveUrl}`);
     }
-  } catch (_) {
-    // Debug URL may not be available immediately
-  }
+  } catch (_) {}
 
   return {
     browser,

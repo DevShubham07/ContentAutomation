@@ -64,11 +64,12 @@ export async function runPipeline(jobId, theme, broadcast) {
     const close = async (obj) => {
       if (obj) await obj.close().catch(() => {});
     };
-    await close(grokContext);
-    await close(flowContext);
-    await close(elevenContext);
+    // Only close separate contexts if they differ from the main browserContext
+    if (grokContext && grokContext !== browserContext) await close(grokContext);
+    if (flowContext && flowContext !== browserContext) await close(flowContext);
+    if (elevenContext && elevenContext !== browserContext) await close(elevenContext);
     await close(browserContext);
-    await close(browser);
+    if (browser) await close(browser);
   };
 
   const log = (msg) => {
@@ -279,9 +280,11 @@ export async function runPipeline(jobId, theme, broadcast) {
     }
 
     const gptPage = await browserContext.newPage();
-    grokContext = await browser.newContext({ acceptDownloads: true });
-    flowContext = await browser.newContext({ acceptDownloads: true });
-    elevenContext = await browser.newContext({ acceptDownloads: true });
+    // For local persistent context (no separate browser object), reuse the same context.
+    // For Browserbase (has browser object), create separate contexts per service.
+    grokContext = browser ? await browser.newContext({ acceptDownloads: true }) : browserContext;
+    flowContext = browser ? await browser.newContext({ acceptDownloads: true }) : browserContext;
+    elevenContext = browser ? await browser.newContext({ acceptDownloads: true }) : browserContext;
 
     let plan = getJob(jobId)?.data?.gptJson ?? null;
 

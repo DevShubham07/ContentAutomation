@@ -322,6 +322,11 @@
           if (j.progress != null) {
             progressFill.style.width = j.progress + "%";
           }
+          if (j.actionRequired) {
+            showError(j.actionRequired);
+          } else if (errorDisplay && errorDisplay.textContent && !String(errorDisplay.textContent).includes("failed")) {
+            clearError();
+          }
           if (j.status === "Completed" || j.status === "failed") {
             clearInterval(interval);
             generateBtn.disabled = false;
