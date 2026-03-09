@@ -15,18 +15,26 @@ const STABILIZATION_ROUNDS = 3;   // text must be unchanged for this many checks
 const STABILIZATION_INTERVAL_MS = 2_000;
 const PLAN_PATH = "./assets/plan.json";
 
-// NOTE: Set to 2 frames for testing. Change back to 72 for production.
 const FRAME_COUNT = 2;
 
 const PROMPT = (theme) => `Output ONLY valid JSON, no other text or markdown. No code fences, no explanation.
 
-Theme: ${theme}
-Duration: 6 seconds
-Total frames: ${FRAME_COUNT}
+You are a creative Instagram Reels content creator. The user will give you a rough idea/theme. Your job is to IMPROVISE on it — think like a trending content creator, elevate the concept, make it visually stunning and scroll-stopping.
+
+User's idea: ${theme}
+
+You need to produce content for a short Instagram Reel (about 6 seconds). The reel will be made by:
+1. Generating 2 KEY IMAGES (the FIRST frame and the LAST frame of the reel)
+2. A video will be interpolated between these 2 images to create smooth motion
+3. A voiceover narration will play over the video
 
 Generate a JSON object with exactly:
-1. "framePrompts": array of ${FRAME_COUNT} strings, one prompt per frame for image generation
-2. "audioPrompt": single string for voice narration/speech synthesis
+1. "framePrompts": array of exactly ${FRAME_COUNT} strings:
+   - framePrompts[0] = detailed image generation prompt for the OPENING/FIRST frame
+   - framePrompts[1] = detailed image generation prompt for the CLOSING/LAST frame
+   Both prompts should describe the same scene/subject but at different moments in time, so smooth video interpolation is possible between them. Be extremely descriptive about lighting, colors, camera angle, composition, and mood. Use cinematic language.
+2. "videoPrompt": a single string describing the motion/transition that should happen between the first and last frame (e.g. "slow zoom in as the sun sets and colors shift from golden to deep purple")
+3. "audioPrompt": a single string for the voiceover narration — short, punchy, Instagram-style caption energy. 1-2 sentences max.
 
 Return only the raw JSON object.`;
 
@@ -127,6 +135,10 @@ function validatePlan(plan) {
   }
   if (typeof plan.audioPrompt !== "string") {
     throw new Error("Plan must have audioPrompt string");
+  }
+  if (typeof plan.videoPrompt !== "string") {
+    console.warn(`[${STEP_NAME}] Warning: videoPrompt missing, using default.`);
+    plan.videoPrompt = "Smooth cinematic transition between the two frames";
   }
   return plan;
 }

@@ -280,11 +280,11 @@ export async function runPipeline(jobId, theme, broadcast) {
     }
 
     const gptPage = await getOrReusePage(browserContext, "https://chatgpt.com");
-    // For local persistent context (no separate browser object), reuse the same context.
-    // For Browserbase (has browser object), create separate contexts per service.
-    grokContext = browser ? await browser.newContext({ acceptDownloads: true }) : browserContext;
-    flowContext = browser ? await browser.newContext({ acceptDownloads: true }) : browserContext;
-    elevenContext = browser ? await browser.newContext({ acceptDownloads: true }) : browserContext;
+    // All steps share the same browserContext so they can find and reuse
+    // the login tabs opened by `npm run login`.
+    grokContext = browserContext;
+    flowContext = browserContext;
+    elevenContext = browserContext;
 
     let plan = getJob(jobId)?.data?.gptJson ?? null;
 
@@ -330,7 +330,8 @@ export async function runPipeline(jobId, theme, broadcast) {
         progressAfter: 70,
         run: async () => {
           log("Stage: Creating Video...");
-          await createVideo(flowContext);
+          const videoPrompt = plan?.videoPrompt || "Smooth cinematic transition between the two frames";
+          await createVideo(flowContext, videoPrompt);
           const videoPath = path.resolve(process.cwd(), VIDEO_PATH);
           updateJob(jobId, { "data.videoPath": videoPath });
           broadcast(jobId, STAGES.VIDEO, { videoPath });

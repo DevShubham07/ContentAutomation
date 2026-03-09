@@ -33,8 +33,6 @@ async function waitForSpinnersGone(page, timeoutMs = 30_000) {
 
 import { getOrReusePage } from "../utils/browser.js";
 
-// ... [existing code] ...
-
 export async function generateAudio(context, narrationText) {
   if (!context || !narrationText || typeof narrationText !== "string") {
     throw new Error("context and narrationText (non-empty string) are required");
@@ -93,8 +91,6 @@ export async function generateAudio(context, narrationText) {
       }
     } catch (err) {
       throw new Error(classifyStepError(STEP_NAME, err));
-    } finally {
-      await page.close();
     }
   }, 3, 2000);
 }

@@ -5,6 +5,7 @@ import { retry } from "../utils/retry.js";
 import { humanDelay } from "../utils/delay.js";
 import { waitForNetworkIdle } from "../utils/networkIdle.js";
 import { classifyStepError, inferLoginRequired } from "../utils/stepGuards.js";
+import { getOrReusePage } from "../utils/browser.js";
 
 const STEP_NAME = "createVideo";
 
@@ -14,16 +15,6 @@ const VIDEO_DIR = "./assets/video";
 const OUTPUT_PATH = "./assets/video/output.mp4";
 const GENERATION_TIMEOUT_MS = 300_000; // 5 min for video generation
 
-// Google Flow UI selectors (may need adjustment for UI changes)
-const SELECTORS = {
-  addButton: "button:has-text('Add'), [aria-label*='Add'], [data-testid='add-frames']",
-  fileInput: "input[type='file']",
-  framesToVideo: "button:has-text('Frames to Video'), [data-value='frames-to-video'], .mode-frames",
-  interpolation: "button:has-text('Smooth'), [aria-label*='interpolation'], [aria-label*='Smooth']",
-  generateButton: "button:has-text('Generate'), button:has-text('Create')",
-  downloadButton: "button:has-text('Download'), a:has-text('Download'), [aria-label*='download']",
-};
-
 function getFramePaths(framesDir) {
   const files = fs.readdirSync(framesDir);
   return files
@@ -32,47 +23,56 @@ function getFramePaths(framesDir) {
     .map((f) => path.join(framesDir, f));
 }
 
-function mergeVideoSegments(segments, outputPath) {
-  return new Promise((resolve, reject) => {
-    if (segments.length === 0) {
-      reject(new Error("No segments to merge"));
-      return;
-    }
-    if (segments.length === 1) {
-      fs.copyFileSync(segments[0], outputPath);
-      resolve();
-      return;
-    }
-
-    const listPath = path.join(path.dirname(outputPath), "concat-list.txt");
-    const listContent = segments.map((s) => `file '${path.resolve(s)}'`).join("\n");
-    fs.writeFileSync(listPath, listContent);
-
-    const proc = spawn('ffmpeg', [
-      "-y",
-      "-f", "concat",
-      "-safe", "0",
-      "-i", listPath,
-      "-c", "copy",
-      outputPath,
-    ], { stdio: "pipe" });
-
-    let stderr = "";
-    proc.stderr?.on("data", (d) => { stderr += d.toString(); });
-    proc.on("close", (code) => {
-      fs.removeSync(listPath).catch(() => { });
-      if (code === 0) return resolve();
-      reject(new Error(`ffmpeg failed: ${stderr.slice(-500)}`));
-    });
-    proc.on("error", reject);
-  });
+/**
+ * Helper: click the first visible element matching any of the given selectors.
+ * Returns true if clicked, false otherwise.
+ */
+async function clickFirst(page, selectors, timeoutMs = 5000) {
+  for (const sel of selectors) {
+    const el = page.locator(sel).first();
+    try {
+      if (await el.isVisible({ timeout: timeoutMs })) {
+        await el.click();
+        return true;
+      }
+    } catch { }
+  }
+  return false;
 }
 
-import { getOrReusePage } from "../utils/browser.js";
+/**
+ * Helper: wait until any of the given selectors becomes visible.
+ * Returns the locator that became visible, or throws on timeout.
+ */
+async function waitForAny(page, selectors, timeoutMs = 30000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    for (const sel of selectors) {
+      const el = page.locator(sel).first();
+      try {
+        const visible = await el.isVisible();
+        if (visible) return el;
+      } catch { }
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(`None of the selectors became visible within ${timeoutMs / 1000}s: ${selectors.join(", ")}`);
+}
 
-// ... [existing code] ...
-
-export async function createVideo(context) {
+/**
+ * Create video using Google Flow — Frames to Video workflow.
+ *
+ * Workflow:
+ * 1. Navigate to Flow
+ * 2. Create a new project (or reuse existing)
+ * 3. Select "Frames to Video" mode
+ * 4. Set portrait (9:16) aspect ratio
+ * 5. Upload the 2 frame images as start and end frame
+ * 6. Enter the video prompt
+ * 7. Click Generate
+ * 8. Wait for generation and download
+ */
+export async function createVideo(context, videoPrompt = "") {
   if (!context) {
     throw new Error("context is required");
   }
@@ -82,9 +82,13 @@ export async function createVideo(context) {
   const videoDir = path.resolve(process.cwd(), VIDEO_DIR);
 
   const framePaths = getFramePaths(framesDir);
-  if (framePaths.length === 0) {
-    throw new Error(`No frame files found in ${FRAMES_DIR}`);
+  if (framePaths.length < 2) {
+    throw new Error(`Need at least 2 frames in ${FRAMES_DIR}, found ${framePaths.length}`);
   }
+
+  // Use first and last frame as start/end
+  const startFrame = framePaths[0];
+  const endFrame = framePaths[framePaths.length - 1];
 
   await fs.ensureDir(videoDir);
 
@@ -92,90 +96,249 @@ export async function createVideo(context) {
     const page = await getOrReusePage(context, "https://labs.google");
 
     try {
+      // ── Step 1: Navigate to Flow ──
       console.log(`[${STEP_NAME}] Navigating to ${FLOW_URL}...`);
       await page.goto(FLOW_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
       await waitForNetworkIdle(page, 15_000);
-      await humanDelay(800, 1600);
+      await humanDelay(2000, 3000);
 
-      console.log(`[${STEP_NAME}] Waiting for Add button...`);
-      const addBtn = page.locator(SELECTORS.addButton).first();
-      try {
-        await addBtn.waitFor({ state: "visible", timeout: 60_000 });
-      } catch (err) {
-        const loginRequired = await inferLoginRequired(page);
-        if (loginRequired) {
-          throw new Error("Login required on Google Flow (Add button not available)");
-        }
-        throw err;
+      // Check if login is required
+      const loginRequired = await inferLoginRequired(page);
+      if (loginRequired) {
+        throw new Error("LOGIN_REQUIRED: Log into Google Flow first. Run: npm run login");
       }
 
-      const fileInput = page.locator(SELECTORS.fileInput).first();
-      const hasFileInput = (await fileInput.count()) > 0;
+      // ── Step 2: Create a new project ──
+      console.log(`[${STEP_NAME}] Looking for 'New project' or create button...`);
+      const newProjectClicked = await clickFirst(page, [
+        "button:has-text('New project')",
+        "button:has-text('New')",
+        "button:has-text('Create')",
+        "button:has-text('Create new')",
+        "[aria-label*='New project']",
+        "[aria-label*='Create']",
+        "button:has-text('+')",
+      ], 10_000);
 
-      if (hasFileInput) {
-        await fileInput.setInputFiles(framePaths);
+      if (newProjectClicked) {
+        console.log(`[${STEP_NAME}] Created new project.`);
+        await humanDelay(2000, 3000);
+        await waitForNetworkIdle(page, 10_000);
       } else {
-        const [fileChooser] = await Promise.all([
-          page.waitForEvent("filechooser", { timeout: 10_000 }),
-          addBtn.click(),
+        console.log(`[${STEP_NAME}] No 'New project' button found — may already be in a project.`);
+      }
+
+      // ── Step 3: Select "Frames to Video" mode ──
+      console.log(`[${STEP_NAME}] Selecting 'Frames to Video' mode...`);
+      // Look for mode selector / dropdown
+      const modeClicked = await clickFirst(page, [
+        "button:has-text('Frames to Video')",
+        "[aria-label*='Frames to Video']",
+        "button:has-text('Frames to video')",
+        "[data-value='frames-to-video']",
+      ], 8_000);
+
+      if (!modeClicked) {
+        // Try clicking a mode dropdown first, then selecting
+        console.log(`[${STEP_NAME}] Looking for mode dropdown...`);
+        const dropdownClicked = await clickFirst(page, [
+          "button:has-text('Text to Video')",
+          "button:has-text('Text to video')",
+          "[aria-label*='mode']",
+          "[aria-label*='Mode']",
+          ".mode-selector",
+          "[role='listbox']",
+          "[role='combobox']",
+        ], 5_000);
+
+        if (dropdownClicked) {
+          await humanDelay(500, 1000);
+          await clickFirst(page, [
+            "button:has-text('Frames to Video')",
+            "[aria-label*='Frames to Video']",
+            "li:has-text('Frames to Video')",
+            "[role='option']:has-text('Frames to Video')",
+            "div:has-text('Frames to Video')",
+          ], 5_000);
+        }
+      }
+      await humanDelay(1000, 2000);
+      console.log(`[${STEP_NAME}] Mode set.`);
+
+      // ── Step 4: Select portrait (9:16) aspect ratio ──
+      console.log(`[${STEP_NAME}] Setting portrait 9:16 aspect ratio...`);
+      const portraitClicked = await clickFirst(page, [
+        "button:has-text('9:16')",
+        "button:has-text('Portrait')",
+        "[aria-label*='9:16']",
+        "[aria-label*='portrait']",
+        "[aria-label*='Portrait']",
+        "[data-value='9:16']",
+      ], 5_000);
+
+      if (!portraitClicked) {
+        // Try clicking an aspect ratio selector first
+        const arClicked = await clickFirst(page, [
+          "button:has-text('16:9')",
+          "button:has-text('1:1')",
+          "[aria-label*='aspect']",
+          "[aria-label*='Aspect']",
+          "[aria-label*='ratio']",
+        ], 5_000);
+        if (arClicked) {
+          await humanDelay(500, 1000);
+          await clickFirst(page, [
+            "button:has-text('9:16')",
+            "button:has-text('Portrait')",
+            "[aria-label*='9:16']",
+            "[role='option']:has-text('9:16')",
+            "li:has-text('9:16')",
+          ], 5_000);
+        }
+      }
+      await humanDelay(500, 1000);
+      console.log(`[${STEP_NAME}] Aspect ratio set.`);
+
+      // ── Step 5: Upload frames as start and end frame ──
+      console.log(`[${STEP_NAME}] Uploading start frame: ${path.basename(startFrame)}`);
+      console.log(`[${STEP_NAME}] Uploading end frame: ${path.basename(endFrame)}`);
+
+      // Look for file input or drag areas
+      const fileInputs = page.locator("input[type='file']");
+      const fileInputCount = await fileInputs.count();
+
+      if (fileInputCount >= 2) {
+        // Two separate file inputs for start and end frame
+        await fileInputs.nth(0).setInputFiles(startFrame);
+        await humanDelay(1000, 2000);
+        await fileInputs.nth(1).setInputFiles(endFrame);
+      } else if (fileInputCount === 1) {
+        // Single file input — upload both
+        await fileInputs.first().setInputFiles([startFrame, endFrame]);
+      } else {
+        // Try clicking upload/add buttons to get file chooser
+        console.log(`[${STEP_NAME}] No file input found, looking for upload buttons...`);
+
+        // Upload start frame
+        const startUploadSelectors = [
+          "button:has-text('Start frame')",
+          "button:has-text('First frame')",
+          "[aria-label*='start frame']",
+          "[aria-label*='Start frame']",
+          "button:has-text('Add start')",
+          "button:has-text('Upload')",
+          "[aria-label*='Upload']",
+          "button:has-text('Add')",
+        ];
+        const [fileChooser1] = await Promise.all([
+          page.waitForEvent("filechooser", { timeout: 15_000 }),
+          clickFirst(page, startUploadSelectors, 10_000),
         ]);
-        await fileChooser.setFiles(framePaths);
+        await fileChooser1.setFiles(startFrame);
+        await humanDelay(1500, 2500);
+
+        // Upload end frame
+        const endUploadSelectors = [
+          "button:has-text('End frame')",
+          "button:has-text('Last frame')",
+          "[aria-label*='end frame']",
+          "[aria-label*='End frame']",
+          "button:has-text('Add end')",
+          "button:has-text('Upload')",
+          "button:has-text('Add')",
+        ];
+        const [fileChooser2] = await Promise.all([
+          page.waitForEvent("filechooser", { timeout: 15_000 }),
+          clickFirst(page, endUploadSelectors, 10_000),
+        ]);
+        await fileChooser2.setFiles(endFrame);
       }
-      await humanDelay(500, 1200);
 
-      const framesToVideo = page.locator(SELECTORS.framesToVideo).first();
-      if ((await framesToVideo.count()) > 0) {
-        await framesToVideo.click();
+      await humanDelay(2000, 3000);
+      console.log(`[${STEP_NAME}] Frames uploaded.`);
+
+      // ── Step 6: Enter video prompt ──
+      if (videoPrompt) {
+        console.log(`[${STEP_NAME}] Entering video prompt: ${videoPrompt.slice(0, 80)}...`);
+        const promptInputSelectors = [
+          "textarea",
+          "[contenteditable='true']",
+          "input[type='text']",
+          "[aria-label*='prompt']",
+          "[aria-label*='Prompt']",
+          "[placeholder*='Describe']",
+          "[placeholder*='prompt']",
+        ];
+
+        let promptEl = null;
+        for (const sel of promptInputSelectors) {
+          const el = page.locator(sel).first();
+          try {
+            if (await el.isVisible({ timeout: 3000 })) {
+              promptEl = el;
+              break;
+            }
+          } catch { }
+        }
+
+        if (promptEl) {
+          await promptEl.focus();
+          await promptEl.fill(videoPrompt);
+          await humanDelay(500, 1000);
+          console.log(`[${STEP_NAME}] Prompt entered.`);
+        } else {
+          console.warn(`[${STEP_NAME}] Could not find prompt input, proceeding without prompt.`);
+        }
       }
 
-      const interpolation = page.locator(SELECTORS.interpolation).first();
-      if ((await interpolation.count()) > 0) {
-        await interpolation.click();
-        await humanDelay(200, 500);
+      // ── Step 7: Click Generate ──
+      console.log(`[${STEP_NAME}] Clicking Generate...`);
+      const generateClicked = await clickFirst(page, [
+        "button:has-text('Generate')",
+        "button:has-text('Create')",
+        "button:has-text('Start')",
+        "[aria-label*='Generate']",
+        "[aria-label*='Create']",
+      ], 10_000);
+
+      if (!generateClicked) {
+        // Try pressing Enter as fallback
+        await page.keyboard.press("Enter");
       }
 
-      const generateBtn = page.locator(SELECTORS.generateButton).first();
-      await generateBtn.waitFor({ state: "visible", timeout: 5_000 });
-      await generateBtn.click();
-
+      // ── Step 8: Wait for generation and download ──
       console.log(`[${STEP_NAME}] Waiting for video generation (up to ${GENERATION_TIMEOUT_MS / 1000}s)...`);
-      const downloadBtn = page.locator(SELECTORS.downloadButton).first();
-      await downloadBtn.waitFor({ state: "visible", timeout: GENERATION_TIMEOUT_MS });
+      await humanDelay(5000, 8000);
 
-      const segmentPaths = [];
-      const SEGMENT_COALESCE_MS = 3000;
+      // Wait for download button to appear (indicates generation is complete)
+      const downloadBtnSelectors = [
+        "button:has-text('Download')",
+        "a:has-text('Download')",
+        "[aria-label*='download']",
+        "[aria-label*='Download']",
+        "button:has-text('Export')",
+      ];
 
+      const downloadBtn = await waitForAny(page, downloadBtnSelectors, GENERATION_TIMEOUT_MS);
+      console.log(`[${STEP_NAME}] Video generated! Downloading...`);
+
+      // Click download and capture the download event
       const downloadPromise = page.waitForEvent("download", { timeout: 60_000 });
       await downloadBtn.click();
 
-      let download = await downloadPromise;
-      let idx = 0;
-      while (download) {
-        const segPath = path.join(videoDir, `segment_${idx}.mp4`);
-        await download.saveAs(segPath);
-        const failure = await download.failure();
-        if (failure) {
-          throw new Error(`Download failed: ${failure}`);
-        }
-        segmentPaths.push(segPath);
-        idx++;
+      const download = await downloadPromise;
+      await download.saveAs(outputPath);
 
-        try {
-          download = await page.waitForEvent("download", { timeout: SEGMENT_COALESCE_MS });
-        } catch {
-          download = null;
-        }
+      const failure = await download.failure();
+      if (failure) {
+        throw new Error(`Download failed: ${failure}`);
       }
 
-      await mergeVideoSegments(segmentPaths, outputPath);
+      const stat = await fs.stat(outputPath);
+      console.log(`[${STEP_NAME}] ✅ Video saved: ${outputPath} (${stat.size} bytes)`);
 
-      for (const seg of segmentPaths) {
-        fs.remove(seg).catch(() => { });
-      }
     } catch (err) {
       throw new Error(classifyStepError(STEP_NAME, err));
-    } finally {
-      await page.close();
     }
-  }, 3, 2000);
+  }, 3, 5000);
 }

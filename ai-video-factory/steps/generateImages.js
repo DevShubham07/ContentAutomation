@@ -14,26 +14,24 @@ function formatFrameIndex(index) {
 /**
  * Wait for Gemini to finish generating images in the response.
  */
-async function waitForGeminiResponse(page, timeoutMs = GENERATION_TIMEOUT_MS) {
+async function waitForGeminiResponse(page, expectedImageCount = 1, timeoutMs = GENERATION_TIMEOUT_MS) {
   const start = Date.now();
   const POLL_MS = 3_000;
 
-  console.log(`[${STEP_NAME}] Waiting for Gemini response...`);
+  console.log(`[${STEP_NAME}] Waiting for Gemini response (need ${expectedImageCount} generated image(s))...`);
 
   while (Date.now() - start < timeoutMs) {
-    const result = await page.evaluate(() => {
-      // Look for images in the page that are likely generated content
+    const result = await page.evaluate((expected) => {
       const imgs = document.querySelectorAll("img");
-      let foundGenerated = false;
+
+      // Count all generated images on the page
+      let generatedCount = 0;
 
       for (const img of imgs) {
         const src = img.src || "";
-        // Skip small images (icons, avatars, logos)
         if (img.naturalWidth < 100 || img.naturalHeight < 100) continue;
-        // Skip known UI images
         if (src.includes("avatar") || src.includes("icon") || src.includes("logo")) continue;
         if (src.includes("data:image/svg")) continue;
-        // Generated images are typically from Google CDN
         if (
           src.includes("googleusercontent.com") ||
           src.includes("gstatic.com") ||
@@ -41,7 +39,7 @@ async function waitForGeminiResponse(page, timeoutMs = GENERATION_TIMEOUT_MS) {
           src.includes("lh3.google") ||
           (img.naturalWidth >= 200 && img.naturalHeight >= 200)
         ) {
-          foundGenerated = true;
+          generatedCount++;
         }
       }
 
@@ -55,8 +53,8 @@ async function waitForGeminiResponse(page, timeoutMs = GENERATION_TIMEOUT_MS) {
         return "refused";
       }
 
-      return foundGenerated ? "done" : "waiting";
-    });
+      return generatedCount >= expected ? "done" : "waiting";
+    }, expectedImageCount);
 
     if (result === "refused") {
       throw new Error("Gemini refused to generate the image");
@@ -78,10 +76,12 @@ async function waitForGeminiResponse(page, timeoutMs = GENERATION_TIMEOUT_MS) {
 }
 
 /**
- * Extract the best (largest) generated image URL from the page.
+ * Extract the best (largest) generated image URL from the page,
+ * excluding any URLs in the provided set (already downloaded).
  */
-async function extractImageUrl(page) {
-  return page.evaluate(() => {
+async function extractImageUrl(page, excludeUrls = new Set()) {
+  const excludeArray = Array.from(excludeUrls);
+  return page.evaluate(({ excludeArray }) => {
     const imgs = document.querySelectorAll("img");
     let bestUrl = null;
     let bestSize = 0;
@@ -91,6 +91,8 @@ async function extractImageUrl(page) {
       if (img.naturalWidth < 100 || img.naturalHeight < 100) continue;
       if (src.includes("avatar") || src.includes("icon") || src.includes("logo")) continue;
       if (src.includes("data:image/svg")) continue;
+      // Skip already-downloaded images
+      if (excludeArray.some((u) => src === u)) continue;
 
       const size = img.naturalWidth * img.naturalHeight;
       if (size > bestSize) {
@@ -99,7 +101,7 @@ async function extractImageUrl(page) {
       }
     }
     return bestUrl;
-  });
+  }, { excludeArray });
 }
 
 /**
@@ -142,17 +144,17 @@ async function downloadImage(page, url, destPath) {
  */
 import { getOrReusePage } from "../utils/browser.js";
 
-// ... [existing imports] ...
-
 export async function generateImages(context, frames) {
   if (!context || !Array.isArray(frames) || frames.length === 0) {
     throw new Error("context and non-empty frames array are required");
   }
 
   const framesDir = path.resolve(process.cwd(), FRAMES_DIR);
-  await fs.ensureDir(framesDir);
+  await fs.emptyDir(framesDir); // Always start fresh
 
   const page = await getOrReusePage(context, "https://gemini.google.com");
+  const downloadedUrls = new Set(); // Track URLs we already saved
+
   try {
     console.log(`[${STEP_NAME}] Navigating to Gemini...`);
     await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
@@ -162,11 +164,6 @@ export async function generateImages(context, frames) {
       const prompt = frames[i];
       const filename = `frame_${formatFrameIndex(i)}.png`;
       const destPath = path.join(framesDir, filename);
-
-      if (await fs.pathExists(destPath)) {
-        console.log(`[${STEP_NAME}] Frame ${i + 1}/${frames.length} exists, skipping.`);
-        continue;
-      }
 
       console.log(`[${STEP_NAME}] Frame ${i + 1}/${frames.length}...`);
 
@@ -196,7 +193,7 @@ export async function generateImages(context, frames) {
       }
 
       // Type prompt
-      const fullPrompt = `Generate an image of: ${prompt}`;
+      const fullPrompt = `Generate a PORTRAIT image (9:16 aspect ratio, vertical orientation like an Instagram Reel). The image should depict: ${prompt}`;
       console.log(`[${STEP_NAME}] Prompt: ${fullPrompt.slice(0, 80)}...`);
 
       await promptInput.focus();
@@ -233,19 +230,22 @@ export async function generateImages(context, frames) {
 
       await humanDelay(2000, 3000);
 
-      // Wait for generation
-      await waitForGeminiResponse(page, GENERATION_TIMEOUT_MS);
+      // Wait for generation — expect i+1 total images on page
+      await waitForGeminiResponse(page, i + 1, GENERATION_TIMEOUT_MS);
 
-      // Extract and download image
-      const imageUrl = await extractImageUrl(page);
-      if (!imageUrl) throw new Error("No image found in Gemini response");
+      // Extract image, excluding ones we already downloaded
+      const imageUrl = await extractImageUrl(page, downloadedUrls);
+      if (!imageUrl) throw new Error("No NEW image found in Gemini response");
+
+      downloadedUrls.add(imageUrl);
 
       const bytes = await downloadImage(page, imageUrl, destPath);
       console.log(`[${STEP_NAME}] ✅ Frame ${i + 1}: ${filename} (${bytes} bytes)`);
 
       if (i < frames.length - 1) await humanDelay(3000, 5000);
     }
-  } finally {
-    await page.close();
+  } catch (err) {
+    // Don't close the reused tab — leave it for future runs
+    throw err;
   }
 }

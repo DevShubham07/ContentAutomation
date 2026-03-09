@@ -1,7 +1,8 @@
 {
   "framePrompts": [
-    "wide cinematic view of a golden sunset dipping behind rugged mountain peaks, warm orange and pink sky reflecting on a calm alpine lake, soft clouds, tranquil atmosphere, ultra-realistic lighting",
-    "sun fully setting behind the mountains, sky turning deep purple and crimson, silhouettes of mountain ridges with fading sunlight, gentle mist over the lake, peaceful twilight mood, cinematic landscape"
+    "cinematic close-up of a joyful small Indian kid about 5 years old holding a bright pink and yellow gulal powder in tiny hands during Holi, colorful powder already lightly dusted on cheeks, wide excited smile, traditional white kurta slightly stained with colors, early morning golden sunlight illuminating floating color particles in the air, shallow depth of field, vibrant festival atmosphere, background of blurred people celebrating Holi, vibrant pink, yellow and blue powders scattered around, shot on 50mm lens, warm cinematic lighting, ultra detailed, joyful festive mood",
+    "dramatic cinematic moment of the same small Indian kid mid-laugh throwing a huge burst of bright gulal powder into the air during Holi, explosion of pink, blue, yellow and orange colors surrounding the child, white kurta now fully splashed with colors, colorful powder cloud filling the frame, sunlight passing through the color particles creating glowing mist, joyful expression with eyes slightly closed from laughter, dynamic composition, slow motion festival vibe, vibrant Indian street celebration in soft focus background, ultra detailed cinematic lighting, festive energy"
   ],
-  "audioPrompt": "As the sun slowly sinks behind the mountains, the sky glows with warm colors, and the world grows quiet in the calm of evening."
+  "videoPrompt": "camera slowly pushes in as the child raises hands and throws colored powder, vibrant gulal particles burst outward and fill the frame creating a colorful explosion",
+  "audioPrompt": "Holi means one thing—pure joy in every color. Let the happiness fly!"
 }
