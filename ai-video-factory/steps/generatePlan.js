@@ -15,36 +15,187 @@ const STABILIZATION_ROUNDS = 3;   // text must be unchanged for this many checks
 const STABILIZATION_INTERVAL_MS = 2_000;
 const PLAN_PATH = "./assets/plan.json";
 
-const FRAME_COUNT = 4;
-const VIDEO_COUNT = FRAME_COUNT - 1; // 3 videos between 4 frames
+const FRAME_COUNT = 3;
+const VIDEO_COUNT = FRAME_COUNT - 1; // 2 videos between 3 frames
 const VIDEO_DURATION_S = 8; // each Flow video is ~8 seconds
-const TOTAL_DURATION_S = VIDEO_COUNT * VIDEO_DURATION_S; // 24 seconds total
+const TOTAL_DURATION_S = VIDEO_COUNT * VIDEO_DURATION_S; // 16 seconds total
 
-const PROMPT = (theme) => `Output ONLY valid JSON, no other text or markdown. No code fences, no explanation.
+const PROMPT = (theme) => `Output ONLY valid JSON.
+No explanation.
+No markdown.
+No code fences.
 
-You are a creative Instagram Reels content creator. The user will give you a rough idea/theme. Your job is to IMPROVISE on it — think like a trending content creator, elevate the concept, make it visually stunning and scroll-stopping.
+ROLE
 
-User's idea: ${theme}
+You are an elite Instagram Reels creative director whose job is to design reels that maximize:
 
-You need to produce content for a short Instagram Reel (about ${TOTAL_DURATION_S} seconds). The reel will be made by:
-1. Generating ${FRAME_COUNT} KEY IMAGES (portrait 9:16) that represent key moments in the reel
-2. Between each consecutive pair of images, a video will be interpolated (${VIDEO_COUNT} videos total, ${VIDEO_DURATION_S}s each)
-3. The videos will be stitched together into one seamless ${TOTAL_DURATION_S}-second reel
-4. An emotional Hindi voiceover will play over the final video
+• viewer retention
+• completion rate
+• rewatchability
+• emotional impact
 
-Generate a JSON object with exactly:
-1. "framePrompts": array of exactly ${FRAME_COUNT} strings:
-   - framePrompts[0] = OPENING frame — the hook that grabs attention
-   - framePrompts[1] = MIDDLE frame — the emotional peak or turning point
-   - framePrompts[2] = CLOSING frame — the satisfying conclusion
-   All prompts should describe the same scene/subject at different moments in time, so smooth video interpolation is possible between consecutive frames. Be extremely descriptive about lighting, colors, camera angle, composition, and mood. Use cinematic language.
-2. "videoPrompts": array of exactly ${VIDEO_COUNT} strings:
-   - videoPrompts[0] = motion/transition from frame 1 to frame 2 (e.g. "camera slowly pushes in as...")
-   - videoPrompts[1] = motion/transition from frame 2 to frame 3
-   Each should describe camera movement, subject motion, and how the scene evolves.
-3. "audioScript": a single string — an emotional, traditional, heart-touching Hindi voiceover script. Exactly ${TOTAL_DURATION_S} seconds when spoken. Write in Devanagari Hindi. It should feel like a storytelling narration — poetic, warm, and deeply emotional. NOT a translation of English, but authentic Hindi poetry/prose.
+Your output will power an automated AI video generation pipeline.
 
-Return only the raw JSON object.`;
+USER IDEA
+${theme}
+
+REEL SPECIFICATIONS
+
+Total Duration: ${TOTAL_DURATION_S} seconds
+
+The reel will be built using:
+
+• ${FRAME_COUNT} key images (portrait 9:16)
+• ${VIDEO_COUNT} interpolated videos between frames
+• each video duration: ${VIDEO_DURATION_S} seconds
+• final stitched reel length: ${TOTAL_DURATION_S} seconds
+• an emotional Hindi voiceover plays across the entire reel
+
+VERY IMPORTANT
+
+All frames MUST depict:
+
+• the SAME subject
+• the SAME environment
+• the SAME scene
+
+KIDS SAFETY & STYLE:
+• NEVER use photorealism or real photos for kids.
+• Use 3D animation, stylized art, or cinematic illustration style for any children.
+
+Only time progression and emotional evolution should change.
+
+This ensures smooth video interpolation.
+
+---
+
+VIRAL STORY STRUCTURE
+
+The reel must follow this psychological arc:
+
+Frame 1 — SCROLL STOPPING HOOK  
+Frame 2 — VISUAL / EMOTIONAL ESCALATION  
+Frame 3 — POWERFUL PAYOFF / REALIZATION  
+
+The viewer should feel curiosity in the beginning and emotional satisfaction at the end.
+
+---
+
+VIRAL PATTERN
+
+Choose ONE storytelling pattern internally:
+
+• transformation
+• discovery
+• contrast
+• illusion reveal
+• emotional realization
+• journey
+• perspective shift
+
+Use this pattern to shape the scene progression.
+
+---
+
+HOOK DESIGN RULES
+
+Frame 1 must immediately grab attention using at least one:
+
+• unusual perspective
+• glowing elements
+• dramatic lighting
+• mysterious subject
+• surreal moment
+• powerful emotion
+• unexpected visual contrast
+
+The viewer should feel curiosity in the first second.
+
+---
+
+VISUAL STYLE
+
+Use cinematic imagery including:
+
+• dramatic lighting
+• volumetric fog
+• neon glow
+• atmospheric particles
+• shallow depth of field
+• wide angle or cinematic close-ups
+• rich color contrast
+• highly detailed environment
+
+---
+
+LOOP DESIGN (VERY IMPORTANT)
+
+The final frame should visually resemble or connect to the opening frame so the reel can loop naturally when replayed.
+
+This increases rewatch rate and virality.
+
+---
+
+OUTPUT FORMAT
+
+Return a JSON object with EXACTLY three fields.
+
+1. "framePrompts"
+
+Array of exactly ${FRAME_COUNT} strings.
+
+framePrompts[0]
+Scroll-stopping opening frame.
+
+framePrompts[1]
+The escalation moment where the scene evolves emotionally or visually.
+
+framePrompts[2]
+The final satisfying or meaningful moment.
+
+All frames must depict the same environment and subject with natural progression through time.
+
+Each prompt must be highly cinematic and visually descriptive.
+
+---
+
+2. "videoPrompts"
+
+Array of exactly ${VIDEO_COUNT} strings describing motion between frames.
+
+videoPrompts[0]
+Motion and transition from frame 1 → frame 2.
+
+videoPrompts[1]
+Motion and transition from frame 2 → frame 3.
+
+Describe:
+
+• camera movement
+• subject motion
+• environmental evolution
+• emotional tone
+
+---
+
+3. "audioScript"
+
+A poetic Hindi narration written in Devanagari script.
+
+Requirements:
+
+• emotional storytelling tone
+• philosophical / heartfelt narration
+• approximately ${Math.round(TOTAL_DURATION_S * 2.4)} words
+• natural spoken Hindi rhythm
+• enhances the visual journey
+
+The narration should feel like a meaningful thought or realization.
+
+---
+
+Return ONLY the raw JSON object.
+`;
 
 /* ── JSON helpers (unchanged) ────────────────────────────────────────── */
 
@@ -307,18 +458,24 @@ async function extractAssistantResponse(page) {
 
 /* ── Main export ─────────────────────────────────────────────────────── */
 
-export async function generatePlan(page, theme, options = {}) {
+export async function generatePlan(page, theme, logger) {
+  const log = (msg) => {
+    if (logger) logger.log(msg);
+    else console.log(`[${STEP_NAME}] ${msg}`);
+  };
+
   if (!page || !theme) {
-    throw new Error("page and theme are required");
+    throw new Error("page and theme (non-empty string) are required");
   }
 
+  log(`Generating plan for theme: "${theme}"...`);
   const planPath = path.resolve(process.cwd(), PLAN_PATH);
   const MAX_PROMPT_ATTEMPTS = 3;
 
   return retry(async () => {
     // ── Navigate & get ChatGPT ready (retried by outer retry on failure) ──
     try {
-      console.log(`[${STEP_NAME}] Navigating to ${CHATGPT_URL}...`);
+      log(`Navigating to ${CHATGPT_URL}...`);
       await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
       console.log(`[${STEP_NAME}] Page loaded, waiting for network idle...`);
       await waitForNetworkIdle(page, 15_000);

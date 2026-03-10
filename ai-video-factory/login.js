@@ -7,9 +7,17 @@ dotenv.config();
 dotenv.config({ path: path.join(__dir, "../.env") });
 
 import { launchBrowser } from "./utils/browser.js";
+import { registerProfile } from "./utils/sessionManager.js";
 
 async function login() {
-  const { browser, context, liveUrl } = await launchBrowser();
+  const profileName = process.argv[2] && !process.argv[2].startsWith('--') 
+    ? process.argv[2] 
+    : "defaultProfile";
+
+  console.log(`Setting up login for profile: ${profileName}`);
+  await registerProfile(profileName);
+
+  const { browser, context, liveUrl } = await launchBrowser(profileName);
   console.log("\n=======================================================");
   console.log("ACTION REQUIRED: Manual Login Setup");
   console.log("=======================================================");

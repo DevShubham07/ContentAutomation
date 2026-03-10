@@ -9,3 +9,10 @@ ai-video-factory/.browserbase-context.json
 **/diagnostics/
 **/logs/
 concat-list.txt
+**/.local-browser-data*/
+debug-*
+*.png
+*.html
+*.webp
+!brain/**/*.webp
+!brain/**/*.png

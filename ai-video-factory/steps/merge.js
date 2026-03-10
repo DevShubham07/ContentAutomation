@@ -9,7 +9,11 @@ const VIDEO_PATH = "./assets/video/output.mp4";
 const AUDIO_PATH = "./assets/audio/narration.mp3";
 const OUTPUT_PATH = "./assets/final.mp4";
 
-export async function mergeVideo() {
+export async function mergeVideo(logger) {
+  const log = (msg) => {
+    if (logger) logger.log(msg);
+    else console.log(`[${STEP_NAME}] ${msg}`);
+  };
   const videoPath = path.resolve(process.cwd(), VIDEO_PATH);
   const audioPath = path.resolve(process.cwd(), AUDIO_PATH);
   const outputPath = path.resolve(process.cwd(), OUTPUT_PATH);

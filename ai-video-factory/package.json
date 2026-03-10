@@ -10,7 +10,8 @@
     "login": "node scripts/login.js",
     "login:bb": "node scripts/login-bb.js",
     "setup:context": "node scripts/setup-context.js",
-    "debug:flow": "node scripts/debug-flow.js"
+    "debug:flow": "node scripts/debug-flow.js",
+    "add-account": "node add-account.js"
   },
   "dependencies": {
     "@browserbasehq/sdk": "^2.7.0",

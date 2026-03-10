@@ -11,7 +11,7 @@ import { generateImages } from "./steps/generateImages.js";
 import { createVideo } from "./steps/createVideo.js";
 import { generateAudio } from "./steps/generateAudio.js";
 import { mergeVideo } from "./steps/merge.js";
-
+import { getAvailableProfile } from "./utils/sessionManager.js";
 async function run(theme) {
   let browser;
   let grokContext;
@@ -36,7 +36,13 @@ async function run(theme) {
   process.on("SIGINT", handleSigint);
 
   try {
-    const result = await launchBrowser();
+    const currentProfile = await getAvailableProfile();
+    if (!currentProfile) {
+      throw new Error("ALL_PROFILES_EXHAUSTED: No accounts have remaining AI credits.");
+    }
+    console.log(`Using profile: ${currentProfile}`);
+    
+    const result = await launchBrowser(currentProfile);
     browser = result.browser;
     const { context } = result;
 

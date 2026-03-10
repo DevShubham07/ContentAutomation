@@ -151,11 +151,11 @@ async function downloadImage(page, url, destPath) {
       return buffer.length;
     }
   } catch (err) {
-    console.warn(`[${STEP_NAME}] Context request failed, falling back to screenshot: ${err.message}`);
+    log(`[${STEP_NAME}] Context request failed, falling back to screenshot: ${err.message}`);
   }
 
   // Attempt 2: Screenshot the element directly from the page
-  console.log(`[${STEP_NAME}] Taking element screenshot fallback...`);
+  log(`[${STEP_NAME}] Taking element screenshot fallback...`);
   const imgHandle = await page.evaluateHandle((src) => {
     return Array.from(document.querySelectorAll("img")).find((i) => i.src === src);
   }, url);
@@ -177,7 +177,11 @@ async function downloadImage(page, url, destPath) {
  */
 import { getOrReusePage } from "../utils/browser.js";
 
-export async function generateImages(context, frames) {
+export async function generateImages(context, frames, logger) {
+  const log = (msg) => {
+    if (logger) logger.log(msg);
+    else console.log(`[${STEP_NAME}] ${msg}`);
+  };
   if (!context || !Array.isArray(frames) || frames.length === 0) {
     throw new Error("context and non-empty frames array are required");
   }

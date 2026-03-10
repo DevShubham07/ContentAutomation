@@ -8,6 +8,8 @@ import { generateImages } from "../steps/generateImages.js";
 import { createVideo } from "../steps/createVideo.js";
 import { generateAudio } from "../steps/generateAudio.js";
 import { mergeVideo } from "../steps/merge.js";
+import { logger } from "../utils/logger.js";
+import { getAvailableProfile, markProfileExhausted } from "../utils/sessionManager.js";
 
 const FRAMES_DIR = "./assets/frames";
 const VIDEO_PATH = "./assets/video/output.mp4";
@@ -72,9 +74,9 @@ export async function runPipeline(jobId, theme, broadcast) {
     if (browser) await close(browser);
   };
 
+  logger.register(jobId, broadcast);
   const log = (msg) => {
-    const line = `[Job ${jobId.slice(0, 8)}] ${msg}`;
-    console.log(line);
+    logger.log(msg);
     appendJobLog(jobId, msg);
   };
 
@@ -171,6 +173,30 @@ export async function runPipeline(jobId, theme, broadcast) {
           throw new Error("PIPELINE_ABORTED");
         }
 
+        if (message.includes("INSUFFICIENT_CREDITS") || message.includes("ELEVEN_LABS_QUOTA")) {
+          const service = message.includes("INSUFFICIENT_CREDITS") ? "googleFlow" : "elevenLabs";
+          log(`[Rotation] Quota exhausted for ${service} on profile ${currentProfile}.`);
+          await markProfileExhausted(currentProfile, service);
+          
+          currentProfile = await getAvailableProfile(service);
+          if (!currentProfile) {
+             throw new Error(`ALL_PROFILES_EXHAUSTED: No accounts remaining for ${service}.`);
+          }
+          log(`[Rotation] Switched to profile: ${currentProfile}. Relaunching browser...`);
+          
+          await cleanup();
+          const launchRes = await launchBrowser(currentProfile);
+          browser = launchRes.browser;
+          browserContext = launchRes.context;
+          grokContext = browserContext;
+          flowContext = browserContext;
+          elevenContext = browserContext;
+          
+          const waitMs = 2000;
+          await sleep(waitMs);
+          continue;
+        }
+
         const recoverable = isRecoverableSiteError(message);
         const canRetry = recoverable && attempt < MAX_STEP_ATTEMPTS;
         if (canRetry) {
@@ -239,6 +265,12 @@ export async function runPipeline(jobId, theme, broadcast) {
       await releaseBrowserbaseSession(previousSessionId);
     }
 
+    let currentProfile = await getAvailableProfile();
+    if (!currentProfile) {
+      throw new Error("ALL_PROFILES_EXHAUSTED: No accounts have remaining AI credits.");
+    }
+    log(`Using profile: ${currentProfile}`);
+
     log("Launching Browserbase session...");
     let launchAttemptError = null;
     let launchResult = null;
@@ -247,7 +279,7 @@ export async function runPipeline(jobId, theme, broadcast) {
         throw new Error("PIPELINE_ABORTED");
       }
       try {
-        launchResult = await launchBrowser();
+        launchResult = await launchBrowser(currentProfile);
         break;
       } catch (err) {
         launchAttemptError = err;
@@ -310,8 +342,8 @@ export async function runPipeline(jobId, theme, broadcast) {
         progressBefore: 10,
         progressAfter: 20,
         run: async () => {
-          log("Stage: Generating GPT Plan...");
-          plan = await generatePlan(gptPage, resolvedTheme);
+          logger.stage(STAGES.GPT_PLAN, STAGES.GPT_PLAN);
+          plan = await generatePlan(gptPage, resolvedTheme, logger);
           updateJob(jobId, { "data.gptJson": plan });
           broadcast(jobId, STAGES.GPT_PLAN, { json: plan });
           log("GPT Plan done.");
@@ -325,8 +357,8 @@ export async function runPipeline(jobId, theme, broadcast) {
         progressAfter: 50,
         run: async () => {
           if (!plan) throw new Error("Missing plan data before image generation");
-          log("Stage: Generating Images...");
-          await generateImages(grokContext, plan.framePrompts);
+          logger.stage(STAGES.IMAGES, STAGES.IMAGES);
+          await generateImages(grokContext, plan.framePrompts, logger);
           const framesDir = path.resolve(process.cwd(), FRAMES_DIR);
           const frameFiles = (await fs.readdir(framesDir))
             .filter((f) => f.match(/^frame_\d{4}\.png$/i))
@@ -344,9 +376,9 @@ export async function runPipeline(jobId, theme, broadcast) {
         progressBefore: 60,
         progressAfter: 70,
         run: async () => {
-          log("Stage: Creating Video...");
+          logger.stage(STAGES.VIDEO, STAGES.VIDEO);
           const videoPrompts = plan?.videoPrompts || ["Smooth cinematic transition"];
-          await createVideo(flowContext, videoPrompts);
+          await createVideo(flowContext, videoPrompts, logger);
           const videoPath = path.resolve(process.cwd(), VIDEO_PATH);
           updateJob(jobId, { "data.videoPath": videoPath });
           broadcast(jobId, STAGES.VIDEO, { videoPath });
@@ -361,9 +393,9 @@ export async function runPipeline(jobId, theme, broadcast) {
         progressAfter: 85,
         run: async () => {
           if (!plan) throw new Error("Missing plan data before audio generation");
-          log("Stage: Generating Audio...");
+          logger.stage(STAGES.AUDIO, STAGES.AUDIO);
           const audioText = plan.audioScript || plan.audioPrompt || "";
-          await generateAudio(elevenContext, audioText);
+          await generateAudio(elevenContext, audioText, logger);
           const audioPath = path.resolve(process.cwd(), AUDIO_PATH);
           updateJob(jobId, { "data.audioPath": audioPath });
           broadcast(jobId, STAGES.AUDIO, { audioPath });
@@ -377,8 +409,8 @@ export async function runPipeline(jobId, theme, broadcast) {
         progressBefore: 90,
         progressAfter: 95,
         run: async () => {
-          log("Stage: Merging final video...");
-          await mergeVideo();
+          logger.stage(STAGES.MERGE, STAGES.MERGE);
+          await mergeVideo(logger);
           const finalPath = path.resolve(process.cwd(), FINAL_PATH);
           updateJob(jobId, { "data.finalPath": finalPath });
           broadcast(jobId, STAGES.MERGE, { finalPath });

@@ -45,17 +45,15 @@ function shouldUseLocalBrowser() {
   const raw = process.env.USE_LOCAL_PLAYWRIGHT;
   if (typeof raw !== "string") return false;
   return TRUE_VALUES.has(raw.trim().toLowerCase());
-}
+}import { spawn } from "node:child_process";
 
-import { spawn } from "node:child_process";
+async function launchLocalBrowser(profileName = "defaultProfile") {
+  const dirName = profileName === "defaultProfile" ? ".local-browser-data" : `.local-browser-data-${profileName}`;
+  const profileDir = path.resolve(process.cwd(), dirName);
+  await fs.ensureDir(profileDir);
 
-// ... [existing imports stay as they are, replace starts below] ...
-
-async function launchLocalBrowser() {
-  await fs.ensureDir(LOCAL_USER_DATA_DIR);
-
-  console.log("[Local] Connecting to system Chrome on port 9222...");
-  console.log(`[Local] User data dir: ${LOCAL_USER_DATA_DIR}`);
+  console.log(`[Local] Connecting to system Chrome on port 9222 for profile: ${profileName}...`);
+  console.log(`[Local] User data dir: ${profileDir}`);
 
   const cdpUrl = "http://127.0.0.1:9222";
   let browser;
@@ -88,7 +86,7 @@ async function launchLocalBrowser() {
     // Launch Chrome directly via spawn, NOT Playwright.
     // Playwright's launcher wrappers break native Chrome profiles.
     const chromeArgs = [
-      `--user-data-dir=${LOCAL_USER_DATA_DIR}`,
+      `--user-data-dir=${profileDir}`,
       "--no-first-run",
       "--no-default-browser-check",
       "--remote-debugging-port=9222",
@@ -131,9 +129,9 @@ async function launchLocalBrowser() {
   };
 }
 
-export async function launchBrowser() {
+export async function launchBrowser(profileName = "defaultProfile") {
   if (shouldUseLocalBrowser()) {
-    return launchLocalBrowser();
+    return launchLocalBrowser(profileName);
   }
 
   const { apiKey, projectId } = getBrowserbaseConfig();

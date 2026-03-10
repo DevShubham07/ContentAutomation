@@ -76,22 +76,70 @@ async function generateOneSegment(page, startFrame, endFrame, prompt, segmentPat
   await humanDelay(3000, 5000);
   await debugScreenshot(page, `${label}_01_project`);
 
-  // ── Ensure VIDEO mode is selected (click '+' or Video pill) ──
-  // The Start/End div buttons only appear when Video mode is active.
+  // ── Ensure VIDEO mode is selected ──
   try {
-    // Click the '+' button to expand the media type picker
-    const plusBtn = page.locator("button[aria-label='+'], button:has-text('+')").first();
-    if (await plusBtn.isVisible({ timeout: 3000 })) {
-      await plusBtn.click();
-      await humanDelay(1000, 1500);
-      // Click the 'Video' option
-      const videoOption = page.locator("text='Video', [data-value='video'], button:has-text('Video')").first();
-      if (await videoOption.isVisible({ timeout: 3000 })) {
-        await videoOption.click();
+    console.log(`[${STEP_NAME}] Looking for the settings pill in the prompt box...`);
+    const settingsPills = [
+      page.locator("button:has-text('x1')").first(),
+      page.locator("button:has-text('Nano Banana')").first(),
+      page.locator("button").filter({ hasText: 'x1' }).first()
+    ];
+
+    let clickedSettings = false;
+    for (const pill of settingsPills) {
+      if (await pill.isVisible({ timeout: 2000 })) {
+        await pill.click();
+        clickedSettings = true;
         await humanDelay(1000, 1500);
+        break;
       }
     }
-  } catch { }
+
+    if (clickedSettings) {
+      console.log(`[${STEP_NAME}] Opened settings pill.`);
+      
+      // Select Video
+      const videoOptions = [
+        page.locator("button:has-text('Video')").first(),
+        page.locator("div[role='menuitem']:has-text('Video')").first(),
+        page.locator("mat-option:has-text('Video')").first(),
+        page.locator("[data-value='video']").first()
+      ];
+      
+      for (const opt of videoOptions) {
+          if (await opt.isVisible({ timeout: 1000 })) {
+              await opt.click();
+              console.log(`[${STEP_NAME}] Selected 'Video' mode.`);
+              await humanDelay(500, 1000);
+              break;
+          }
+      }
+
+      // Also ensure Portrait and 1x (though Video click usually closes the menu, but if it doesn't we can try)
+      try {
+          const portraitBtn = page.locator("button:has-text('Portrait'), [aria-label*='Portrait']").first();
+          if (await portraitBtn.isVisible({ timeout: 1000 })) {
+              await portraitBtn.click();
+              console.log(`[${STEP_NAME}] Selected 'Portrait' mode.`);
+          }
+      } catch {}
+
+      try {
+          const x1Btn = page.locator("button:has-text('x1'), [aria-label*='x1']").first();
+          if (await x1Btn.isVisible({ timeout: 1000 })) {
+              await x1Btn.click();
+              console.log(`[${STEP_NAME}] Selected 'x1' ratio.`);
+          }
+      } catch {}
+
+    } else {
+        console.log(`[${STEP_NAME}] Settings pill not found. Will try to proceed anyway.`);
+    }
+
+    await humanDelay(500, 1000);
+  } catch (err) {
+    console.log(`[${STEP_NAME}] Could not set Video mode:`, err.message);
+  }
   await debugScreenshot(page, `${label}_01b_videomode`);
 
   // ── Helper: open asset picker and upload a file ──
@@ -198,6 +246,7 @@ async function generateOneSegment(page, startFrame, endFrame, prompt, segmentPat
   // ── Upload START frame ──
   console.log(`[${STEP_NAME}] [Seg ${segIdx}] Uploading start frame: ${path.basename(startFrame)}`);
   const startLocators = [
+    page.locator("button:has-text('+ Start'), button:has-text('Start image'), [aria-label*='Start image']").first(),
     page.locator("div:has-text('Start') >> nth=0"),
     page.locator("[aria-label='Start frame']").first(),
     page.locator("text=Start").first(),
@@ -228,6 +277,7 @@ async function generateOneSegment(page, startFrame, endFrame, prompt, segmentPat
   // ── Upload END frame ──
   console.log(`[${STEP_NAME}] [Seg ${segIdx}] Uploading end frame: ${path.basename(endFrame)}`);
   const endLocators = [
+    page.locator("button:has-text('+ End'), button:has-text('End image'), [aria-label*='End image']").first(),
     page.locator("div:has-text('End') >> nth=0"),
     page.locator("[aria-label='End frame']").first(),
     page.locator("text=End").first(),
@@ -377,8 +427,23 @@ async function generateOneSegment(page, startFrame, endFrame, prompt, segmentPat
   // ── Click Create ──
   console.log(`[${STEP_NAME}] [Seg ${segIdx}] Clicking Create...`);
 
-  let outOfCredits = await page.evaluate(() => document.body.innerText.includes('You need more AI credits'));
-  if (outOfCredits) {
+  // Helper to check for generation-blocking errors (e.g. out of AI credits)
+  const checkCredits = async () => {
+    try {
+      // First check if text is already visible (sometimes renders in DOM)
+      if (await page.locator("text='more AI credits'").first().isVisible({ timeout: 1000 })) return true;
+
+      // The definitive indicator that generation is blocked (credits, policy, etc)
+      // is the presence of this orange alert sphere instead of the Create arrow.
+      const alertSphere = page.locator("img[src*='flow_alert_sphere.svg']").first();
+      if (await alertSphere.isVisible({ timeout: 1000 })) {
+        return true;
+      }
+      return false;
+    } catch { return false; }
+  };
+
+  if (await checkCredits()) {
     throw new Error(`INSUFFICIENT_CREDITS: You need more AI credits in Google Flow to complete this request.`);
   }
 
@@ -386,7 +451,6 @@ async function generateOneSegment(page, startFrame, endFrame, prompt, segmentPat
     "button:has-text('Create')",
     "button[aria-label='Create']",
     "button:has-text('arrow_forward')",
-    // the circular right arrow button at the bottom right
     "button.send-button",
     "button[type='submit']",
     // Fallback for the orange error button
@@ -408,8 +472,7 @@ async function generateOneSegment(page, startFrame, endFrame, prompt, segmentPat
   }
 
   await humanDelay(1000, 2000);
-  outOfCredits = await page.evaluate(() => document.body.innerText.includes('You need more AI credits'));
-  if (outOfCredits) {
+  if (await checkCredits()) {
     throw new Error(`INSUFFICIENT_CREDITS: You need more AI credits in Google Flow to complete this request.`);
   }
 
@@ -417,22 +480,20 @@ async function generateOneSegment(page, startFrame, endFrame, prompt, segmentPat
     // Fallback: press Enter on keyboard if focused in prompt
     try {
       await page.keyboard.press("Enter");
-      created = true;
+      // Don't auto-assume created=true anymore, because it might have failed.
       console.log(`[${STEP_NAME}] [Seg ${segIdx}] Flow create button not found or disabled, pressed Enter instead.`);
     } catch { }
   }
 
   await humanDelay(1000, 2000);
-  outOfCredits = await page.evaluate(() => document.body.innerText.includes('You need more AI credits'));
-  if (outOfCredits) {
+  if (await checkCredits()) {
     throw new Error(`INSUFFICIENT_CREDITS: You need more AI credits in Google Flow to complete this request.`);
   }
+  
+  // If we STILL haven't moved to generation (e.g. video element didn't appear or prompt still open after 10s)
+  // we could fail, but we'll let the standard timeout handle unexpected freezing if it's not a credit issue.
 
-  if (!created) {
-    await debugScreenshot(page, `${label}_create_fail`);
-    throw new Error(`[Seg ${segIdx}] Could not click Create.`);
-  }
-  console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ Create clicked. Waiting for generation...`);
+  console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ Create action attempted. Waiting for generation...`);
   await humanDelay(2000, 4000);
   await debugScreenshot(page, `${label}_04_generating`);
 

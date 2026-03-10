@@ -51,7 +51,11 @@ async function waitForSpinnersGone(page, timeoutMs = 30_000) {
  *  - Generate button: button with text "Generate speech", data-testid="tts-generate"
  *  - After generation: a play button and download button appear in the history
  */
-export async function generateAudio(context, narrationText) {
+export async function generateAudio(context, narrationText, logger) {
+  const log = (msg) => {
+    if (logger) logger.log(msg);
+    else console.log(`[${STEP_NAME}] ${msg}`);
+  };
   if (!context || !narrationText || typeof narrationText !== "string") {
     throw new Error("context and narrationText (non-empty string) are required");
   }
@@ -138,9 +142,26 @@ export async function generateAudio(context, narrationText) {
         } catch { }
       }
 
+      // Helper to check for ElevenLabs quota errors
+      const checkElevenQuota = async () => {
+        try {
+          const quotaTxt = await page.locator("text=/quota exceeded|insufficient credits|upgrade/i").first().isVisible({ timeout: 1000 });
+          return quotaTxt;
+        } catch { return false; }
+      };
+
+      if (await checkElevenQuota()) {
+        throw new Error("ELEVEN_LABS_QUOTA_EXCEEDED: You need more ElevenLabs quota to complete this request.");
+      }
+
       if (!generateClicked) {
         await debugScreenshot(page, "generate_not_found");
         throw new Error("Could not find 'Generate speech' button.");
+      }
+
+      await humanDelay(1500, 2500);
+      if (await checkElevenQuota()) {
+        throw new Error("ELEVEN_LABS_QUOTA_EXCEEDED: You need more ElevenLabs quota to complete this request.");
       }
 
       // ── Wait for generation to complete ──
