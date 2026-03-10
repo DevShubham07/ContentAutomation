@@ -15,10 +15,10 @@ const STABILIZATION_ROUNDS = 3;   // text must be unchanged for this many checks
 const STABILIZATION_INTERVAL_MS = 2_000;
 const PLAN_PATH = "./assets/plan.json";
 
-const FRAME_COUNT = 3;
-const VIDEO_COUNT = FRAME_COUNT - 1; // 2 videos between 3 frames
+const FRAME_COUNT = 4;
+const VIDEO_COUNT = FRAME_COUNT - 1; // 3 videos between 4 frames
 const VIDEO_DURATION_S = 8; // each Flow video is ~8 seconds
-const TOTAL_DURATION_S = VIDEO_COUNT * VIDEO_DURATION_S; // 16 seconds total
+const TOTAL_DURATION_S = VIDEO_COUNT * VIDEO_DURATION_S; // 24 seconds total
 
 const PROMPT = (theme) => `Output ONLY valid JSON, no other text or markdown. No code fences, no explanation.
 

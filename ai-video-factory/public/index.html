@@ -342,6 +342,40 @@
       to { transform: rotate(360deg); }
     }
 
+    .logs-container {
+      margin-top: 2rem;
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+      font-size: 0.75rem;
+      height: 300px;
+      overflow-y: auto;
+      color: #a1a1aa;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      scroll-behavior: smooth;
+    }
+
+    .log-entry {
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-entry .timestamp {
+      color: var(--text-muted);
+      margin-right: 8px;
+      user-select: none;
+    }
+
+    .log-entry.info { color: #e4e4e7; }
+    .log-entry.stage { color: var(--accent); font-weight: bold; }
+    .log-entry.error { color: var(--error); }
+    .log-entry.success { color: var(--success); }
+
     .hidden {
       display: none;
     }
@@ -410,6 +444,10 @@
           <div class="step-data" id="data-final"></div>
         </div>
       </div>
+    </div>
+
+    <div class="logs-container hidden" id="logsContainer">
+      <div id="logs"></div>
     </div>
   </div>
 

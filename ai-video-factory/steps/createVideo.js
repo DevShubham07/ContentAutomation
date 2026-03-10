@@ -76,117 +76,320 @@ async function generateOneSegment(page, startFrame, endFrame, prompt, segmentPat
   await humanDelay(3000, 5000);
   await debugScreenshot(page, `${label}_01_project`);
 
+  // ── Ensure VIDEO mode is selected (click '+' or Video pill) ──
+  // The Start/End div buttons only appear when Video mode is active.
+  try {
+    // Click the '+' button to expand the media type picker
+    const plusBtn = page.locator("button[aria-label='+'], button:has-text('+')").first();
+    if (await plusBtn.isVisible({ timeout: 3000 })) {
+      await plusBtn.click();
+      await humanDelay(1000, 1500);
+      // Click the 'Video' option
+      const videoOption = page.locator("text='Video', [data-value='video'], button:has-text('Video')").first();
+      if (await videoOption.isVisible({ timeout: 3000 })) {
+        await videoOption.click();
+        await humanDelay(1000, 1500);
+      }
+    }
+  } catch { }
+  await debugScreenshot(page, `${label}_01b_videomode`);
+
+  // ── Helper: open asset picker and upload a file ──
+  async function uploadViaAssetPicker(triggerLocator, filePath, frameLabel) {
+    const filename = path.basename(filePath);
+    let uploaded = false;
+
+    // First try: native file chooser (older Flow UI)
+    try {
+      const [fc] = await Promise.all([
+        page.waitForEvent("filechooser", { timeout: 4000 }),
+        triggerLocator.click(),
+      ]);
+      await fc.setFiles(filePath);
+      console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ ${frameLabel} uploaded via file chooser.`);
+      uploaded = true;
+    } catch {
+      // Asset picker opened instead
+    }
+
+    if (!uploaded) {
+      // Asset picker: wait for it to appear
+      await humanDelay(800, 1200);
+
+      // Check if the file is already in the picker (previously uploaded)
+      const existingItem = page.locator(`text="${filename}"`).first();
+      try {
+        if (await existingItem.isVisible({ timeout: 3000 })) {
+          await existingItem.click();
+          console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ ${frameLabel} selected from asset picker ('${filename}').`);
+          uploaded = true;
+        }
+      } catch { }
+
+      if (!uploaded) {
+        // Upload button inside the picker (the upward arrow icon next to search)
+        const uploadIcons = [
+          "button[aria-label='Upload']",
+          "button[aria-label='upload']",
+          "[aria-label='Upload'] button",
+          "button.upload-button",
+          // The upload icon is a mat-icon-button with an upload icon in the search bar area
+          "div[class*='search'] button",
+          "input[type='file']",
+        ];
+
+        for (const sel of uploadIcons) {
+          try {
+            const el = page.locator(sel).first();
+            if (await el.isVisible({ timeout: 2000 })) {
+              if (sel === "input[type='file']") {
+                await el.setInputFiles(filePath);
+                uploaded = true;
+              } else {
+                const [fc] = await Promise.all([
+                  page.waitForEvent("filechooser", { timeout: 8000 }),
+                  el.click(),
+                ]);
+                await fc.setFiles(filePath);
+                uploaded = true;
+              }
+              if (uploaded) {
+                console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ ${frameLabel} uploaded via picker upload btn (${sel}).`);
+                break;
+              }
+            }
+          } catch { }
+        }
+      }
+
+      // Close/dismiss picker if upload was done
+      if (uploaded) {
+        await humanDelay(800, 1200);
+        // Press Escape only if picker is still visible
+        try { await page.keyboard.press("Escape"); } catch { }
+      }
+    }
+
+    return uploaded;
+  }
+
+  // ── Helper to wait for the upload percentage indicator to disappear ──
+  async function waitForUploadToFinish(label) {
+    console.log(`[${STEP_NAME}] [Seg ${segIdx}] Waiting for ${label} upload to finish...`);
+    const startWait = Date.now();
+    let isUploading = true;
+    while (Date.now() - startWait < 45000) {
+      // Check for any text matching 1% to 99% inside the media placeholders
+      const percentLoc = page.locator("text=/%/");
+      if (await percentLoc.count() === 0) {
+        isUploading = false;
+        break;
+      }
+      await humanDelay(1000, 2000);
+      await debugScreenshot(page, `${label}_upload_wait_${Math.round((Date.now() - startWait) / 1000)}s`);
+    }
+    if (isUploading) {
+      console.log(`[${STEP_NAME}] [Seg ${segIdx}] Warning: Upload percentage didn't clear after 45s.`);
+    } else {
+      console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ ${label} upload complete.`);
+    }
+  }
+
   // ── Upload START frame ──
   console.log(`[${STEP_NAME}] [Seg ${segIdx}] Uploading start frame: ${path.basename(startFrame)}`);
-  const startSelectors = [
-    "button:has-text('Start')",
-    "text=Start",
+  const startLocators = [
+    page.locator("div:has-text('Start') >> nth=0"),
+    page.locator("[aria-label='Start frame']").first(),
+    page.locator("text=Start").first(),
+    page.locator("button:has-text('Start')").first(),
   ];
+
   let startUploaded = false;
-  for (const sel of startSelectors) {
+  for (const loc of startLocators) {
     try {
-      const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 3000 })) {
-        const [fileChooser] = await Promise.all([
-          page.waitForEvent("filechooser", { timeout: 10_000 }),
-          el.click(),
-        ]);
-        await fileChooser.setFiles(startFrame);
-        startUploaded = true;
-        break;
+      if (await loc.isVisible({ timeout: 3000 })) {
+        startUploaded = await uploadViaAssetPicker(loc, startFrame, "Start frame");
+        if (startUploaded) break;
       }
     } catch { }
   }
+
   if (!startUploaded) {
-    // Fallback: file input
     const fi = page.locator("input[type='file']").first();
-    if (await fi.count() > 0) {
-      await fi.setInputFiles(startFrame);
-      startUploaded = true;
-    }
+    if (await fi.count() > 0) { await fi.setInputFiles(startFrame); startUploaded = true; }
   }
   if (!startUploaded) {
     await debugScreenshot(page, `${label}_start_fail`);
     throw new Error(`[Seg ${segIdx}] Could not upload start frame.`);
   }
-  console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ Start frame uploaded.`);
-  await humanDelay(2000, 3000);
+  await waitForUploadToFinish("start_frame");
   await debugScreenshot(page, `${label}_02_start_done`);
 
   // ── Upload END frame ──
   console.log(`[${STEP_NAME}] [Seg ${segIdx}] Uploading end frame: ${path.basename(endFrame)}`);
-  const endSelectors = [
-    "button:has-text('End')",
-    "text=End",
+  const endLocators = [
+    page.locator("div:has-text('End') >> nth=0"),
+    page.locator("[aria-label='End frame']").first(),
+    page.locator("text=End").first(),
+    page.locator("button:has-text('End')").first(),
   ];
+
   let endUploaded = false;
-  for (const sel of endSelectors) {
+  for (const loc of endLocators) {
     try {
-      const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 3000 })) {
-        const [fileChooser] = await Promise.all([
-          page.waitForEvent("filechooser", { timeout: 10_000 }),
-          el.click(),
-        ]);
-        await fileChooser.setFiles(endFrame);
-        endUploaded = true;
-        break;
+      if (await loc.isVisible({ timeout: 3000 })) {
+        endUploaded = await uploadViaAssetPicker(loc, endFrame, "End frame");
+        if (endUploaded) break;
       }
     } catch { }
   }
+
   if (!endUploaded) {
     const fis = page.locator("input[type='file']");
     const fiCount = await fis.count();
-    if (fiCount >= 2) {
-      await fis.nth(1).setInputFiles(endFrame);
-      endUploaded = true;
-    } else if (fiCount === 1) {
-      await fis.first().setInputFiles(endFrame);
-      endUploaded = true;
-    }
+    if (fiCount >= 2) { await fis.nth(1).setInputFiles(endFrame); endUploaded = true; }
+    else if (fiCount === 1) { await fis.first().setInputFiles(endFrame); endUploaded = true; }
   }
   if (!endUploaded) {
     await debugScreenshot(page, `${label}_end_fail`);
     throw new Error(`[Seg ${segIdx}] Could not upload end frame.`);
   }
-  console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ End frame uploaded.`);
-  await humanDelay(2000, 3000);
+  await waitForUploadToFinish("end_frame");
   await debugScreenshot(page, `${label}_03_end_done`);
+
 
   // ── Enter prompt ──
   if (prompt) {
     console.log(`[${STEP_NAME}] [Seg ${segIdx}] Prompt: ${prompt.slice(0, 80)}...`);
     const promptSelectors = [
-      "input[aria-label='Editable text']",
-      "input[type='text']",
+      "textarea[aria-label*='prompt']",
+      "textarea[placeholder*='create']",
       "textarea",
       "[contenteditable='true']",
+      "input[type='text']",
     ];
-    for (const sel of promptSelectors) {
-      try {
-        const el = page.locator(sel).first();
-        if (await el.isVisible({ timeout: 3000 })) {
-          await el.click();
-          await el.fill(prompt);
-          console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ Prompt entered.`);
-          break;
-        }
-      } catch { }
+    let promptEntered = false;
+
+    // Retry entering the prompt a few times if it doesn't stick
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      for (const sel of promptSelectors) {
+        try {
+          const el = page.locator(sel).first();
+          if (await el.isVisible({ timeout: 2000 })) {
+            await el.click();
+            await humanDelay(300, 500);
+            await el.fill(prompt);
+            await humanDelay(800, 1200);
+
+            // Verify the text is actually there
+            let val = "";
+            try { val = await el.inputValue(); } catch { val = await el.textContent(); }
+            if (val && val.length > 5) {
+              promptEntered = true;
+              console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ Prompt successfully entered and verified.`);
+              break;
+            } else {
+              console.log(`[${STEP_NAME}] [Seg ${segIdx}] WARNING: Tried to fill prompt but it remained empty. Retrying...`);
+            }
+          }
+        } catch { }
+      }
+      if (promptEntered) break;
+      await humanDelay(1000, 2000);
     }
+
+    if (!promptEntered) {
+      await debugScreenshot(page, `${label}_prompt_fail`);
+      console.log(`[${STEP_NAME}] [Seg ${segIdx}] ❌ Failed to verify prompt was entered, but proceeding anyway.`);
+    }
+
+    await debugScreenshot(page, `${label}_03b_prompt_entered`);
   }
-  await humanDelay(500, 1000);
+  await humanDelay(1000, 2000);
+
+  // ── Select Portrait & 1x Option ──
+  console.log(`[${STEP_NAME}] [Seg ${segIdx}] Selecting Portrait and 1x options...`);
+  try {
+    const dropdownBtnSelectors = [
+      "button:has-text('x2')",
+      "div:has-text('x2')",
+      "[aria-label*='x2']",
+      "button:has-text('Video')", 
+      // Sometimes it says "16:9", "Landscape", or "1:1" if previously changed
+      "button:has-text('16:9')",
+      "button:has-text('1:1')",
+      "button:has-text('9:16')",
+      "button:has-text('Landscape')",
+      "button:has-text('Square')"
+    ];
+
+    let dropdownOpened = false;
+    for (const sel of dropdownBtnSelectors) {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 1000 })) {
+        await btn.click();
+        dropdownOpened = true;
+        await humanDelay(500, 1000);
+        break;
+      }
+    }
+
+    if (dropdownOpened) {
+      // 1. Select Portrait
+      const portraitOptions = [
+        "text='Portrait'",
+        "text='9:16'",
+        "div[role='option']:has-text('Portrait')",
+        "button:has-text('Portrait')"
+      ];
+      for (const sel of portraitOptions) {
+        const opt = page.locator(sel).last(); 
+        if (await opt.isVisible({ timeout: 1000 })) {
+            await opt.click();
+            console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ Selected Portrait (9:16) orientation.`);
+            await humanDelay(300, 500); // give UI time to stabilize
+            break;
+        }
+      }
+
+      // 2. Select 1x
+      const oneXOptions = [
+        "text='1x'", "text='x1'", "text='1'", 
+        "div[role='option']:has-text('1')",
+        "button:has-text('1x')",
+        "button:has-text('1')"
+      ];
+      for (const sel of oneXOptions) {
+        const opt = page.locator(sel).last(); 
+        if (await opt.isVisible({ timeout: 1000 })) {
+            await opt.click();
+            console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ Selected 1x generation from picker.`);
+            break;
+        }
+      }
+    } else {
+      console.log(`[${STEP_NAME}] [Seg ${segIdx}] Warning: Format/Quantity button not found.`);
+    }
+  } catch (err) {
+    console.log(`[${STEP_NAME}] [Seg ${segIdx}] Warning: Error changing Portrait/1x option: ${err.message}`);
+  }
 
   // ── Click Create ──
   console.log(`[${STEP_NAME}] [Seg ${segIdx}] Clicking Create...`);
   const createSelectors = [
     "button:has-text('Create')",
+    "button[aria-label='Create']",
     "button:has-text('arrow_forward')",
+    // the circular right arrow button at the bottom right
+    "button.send-button",
+    "button[type='submit']"
   ];
   let created = false;
   for (const sel of createSelectors) {
     try {
       const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 5000 })) {
+      // Ensure the button is enabled before clicking
+      if (await el.isVisible({ timeout: 2000 }) && await el.isEnabled()) {
         await el.click();
         created = true;
         break;
@@ -194,12 +397,21 @@ async function generateOneSegment(page, startFrame, endFrame, prompt, segmentPat
     } catch { }
   }
   if (!created) {
+    // Fallback: press Enter on keyboard if focused in prompt
+    try {
+      await page.keyboard.press("Enter");
+      created = true;
+      console.log(`[${STEP_NAME}] [Seg ${segIdx}] Flow create button not found, pressed Enter.`);
+    } catch { }
+  }
+  if (!created) {
     await debugScreenshot(page, `${label}_create_fail`);
     throw new Error(`[Seg ${segIdx}] Could not click Create.`);
   }
   console.log(`[${STEP_NAME}] [Seg ${segIdx}] ✅ Create clicked. Waiting for generation...`);
-  await humanDelay(5000, 8000);
+  await humanDelay(2000, 4000);
   await debugScreenshot(page, `${label}_04_generating`);
+
 
   // ── Wait for video to be ready ──
   const start = Date.now();

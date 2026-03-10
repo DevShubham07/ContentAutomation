@@ -225,28 +225,33 @@ export async function generateImages(context, frames) {
         );
       }
 
-      // Type prompt
+      // Type prompt — use keyboard.type() so Quill/React state fires correctly
       const fullPrompt = `Generate a PORTRAIT image (9:16 aspect ratio, vertical orientation like an Instagram Reel). The image should depict: ${prompt}`;
       console.log(`[${STEP_NAME}] Prompt: ${fullPrompt.slice(0, 80)}...`);
 
-      await promptInput.focus();
-      await promptInput.evaluate((el, text) => {
-        if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
-          el.value = text;
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-        } else {
-          el.innerText = text;
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-        }
-      }, fullPrompt);
-      await humanDelay(500, 1000);
+      await promptInput.click();
+      // Select all existing text and clear it first
+      await page.keyboard.press("Control+a");
+      await page.keyboard.press("Backspace");
+      await humanDelay(300, 600);
 
-      // Send
+      // Type character-by-character so Quill/React firing input events correctly
+      await page.keyboard.type(fullPrompt, { delay: 10 });
+      await humanDelay(800, 1200);
+
+      // Send — try buttons first, then Enter
       const sendBtnSelectors = [
         "button[aria-label='Send message']",
         "button[aria-label='Send']",
+        "button[data-testid='send-button']",
         "button.send-button",
         ".send-button-container button",
+        "button[jsname='Qx7uuf']",
+        "button[jsaction*='send']",
+        // Gemini 2025 UI — mat-icon-button containing the send/arrow icon
+        "button.send-button-with-footnote-container",
+        "div[class*='send'] button",
+        "mat-icon-button[aria-label*='end']",
       ];
       let sent = false;
       for (const sel of sendBtnSelectors) {
@@ -255,11 +260,16 @@ export async function generateImages(context, frames) {
           if (await btn.isVisible({ timeout: 2000 }) && await btn.isEnabled()) {
             await btn.click();
             sent = true;
+            console.log(`[${STEP_NAME}] Sent via button: ${sel}`);
             break;
           }
         } catch { }
       }
-      if (!sent) await page.keyboard.press("Enter");
+      if (!sent) {
+        // Fallback: press Enter
+        console.log(`[${STEP_NAME}] No send button found, pressing Enter`);
+        await page.keyboard.press("Enter");
+      }
 
       await humanDelay(2000, 3000);
 

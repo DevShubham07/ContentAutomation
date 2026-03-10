@@ -41,9 +41,9 @@ async function run(theme) {
     const { context } = result;
 
     const gptPage = await context.newPage();
-    grokContext = await browser.newContext({ acceptDownloads: true });
-    flowContext = await browser.newContext({ acceptDownloads: true });
-    elevenContext = await browser.newContext({ acceptDownloads: true });
+    grokContext = context;
+    flowContext = context;
+    elevenContext = context;
 
     let plan;
     try {
@@ -61,14 +61,14 @@ async function run(theme) {
     await humanDelay(1000, 2500);
 
     try {
-      await createVideo(flowContext);
+      await createVideo(flowContext, plan.videoPrompts || []);
     } catch (err) {
       throw new Error(`Step "createVideo" failed: ${err.message}`);
     }
     await humanDelay(1000, 2500);
 
     try {
-      await generateAudio(elevenContext, plan.audioPrompt);
+      await generateAudio(elevenContext, plan.audioScript || plan.audioPrompt || "");
     } catch (err) {
       throw new Error(`Step "generateAudio" failed: ${err.message}`);
     }

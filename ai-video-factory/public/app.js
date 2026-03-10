@@ -20,6 +20,8 @@
   const elapsedTimer = document.getElementById("elapsedTimer");
   const pipelineNodes = document.getElementById("pipelineNodes");
   const errorDisplay = document.getElementById("errorDisplay");
+  const logsContainer = document.getElementById("logsContainer");
+  const logsDiv = document.getElementById("logs");
 
   let timerInterval = null;
   let startTime = null;
@@ -55,6 +57,22 @@
     if (!errorDisplay) return;
     errorDisplay.textContent = "";
     errorDisplay.classList.add("hidden");
+  }
+
+  function appendLog(message, type = "info") {
+    if (!logsDiv || !logsContainer) return;
+    logsContainer.classList.remove("hidden");
+    
+    const entry = document.createElement("div");
+    entry.className = `log-entry ${type}`;
+    
+    const ts = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    entry.innerHTML = `<span class="timestamp">[${ts}]</span>${message}`;
+    
+    logsDiv.appendChild(entry);
+    
+    // Auto scroll to bottom
+    logsContainer.scrollTop = logsContainer.scrollHeight;
   }
 
   function setProgressByStageIndex(stageKey) {
@@ -102,6 +120,8 @@
     updatePipelineNodes(null, null);
     stopTimer();
     clearError();
+    if (logsDiv) logsDiv.innerHTML = "";
+    if (logsContainer) logsContainer.classList.add("hidden");
   }
 
   function setStepLoading(stageKey, loading) {
@@ -211,7 +231,16 @@
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
-        if (msg.jobId === jobId) onMessage(msg);
+        if (msg.jobId === jobId) {
+          if (msg.message) {
+            let logType = "info";
+            if (msg.stage === "failed") logType = "error";
+            else if (msg.stage === "Completed") logType = "success";
+            else if (msg.message.startsWith("Stage:")) logType = "stage";
+            appendLog(msg.message, logType);
+          }
+          onMessage(msg);
+        }
       } catch (_) {}
     };
     ws.onerror = () => {

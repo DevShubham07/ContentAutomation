@@ -3,3 +3,9 @@ node_modules/
 .env
 *.log
 ai-video-factory/.browserbase-context.json
+**/assets/
+**/debug-screenshots/
+**/.local-browser-data/
+**/diagnostics/
+**/logs/
+concat-list.txt

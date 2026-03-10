@@ -21,7 +21,7 @@ export async function mergeVideo() {
     throw new Error(`[${STEP_NAME}] Audio file not found: ${AUDIO_PATH}`);
   }
 
-  const cmd = `ffmpeg -y -i "${videoPath}" -i "${audioPath}" -c:v copy -c:a aac -shortest "${outputPath}"`;
+  const cmd = `ffmpeg -y -i "${videoPath}" -i "${audioPath}" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -shortest "${outputPath}"`;
 
   try {
     await execAsync(cmd, { timeout: 120_000 });

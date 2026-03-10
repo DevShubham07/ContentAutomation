@@ -28,6 +28,9 @@ const SITES = [
 
 // Find Chrome on macOS
 const CHROME_PATHS = [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files\\Google\\Chrome Canary\\Application\\chrome.exe",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
