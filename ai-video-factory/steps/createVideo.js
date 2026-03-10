@@ -376,34 +376,58 @@ async function generateOneSegment(page, startFrame, endFrame, prompt, segmentPat
 
   // ── Click Create ──
   console.log(`[${STEP_NAME}] [Seg ${segIdx}] Clicking Create...`);
+
+  let outOfCredits = await page.evaluate(() => document.body.innerText.includes('You need more AI credits'));
+  if (outOfCredits) {
+    throw new Error(`INSUFFICIENT_CREDITS: You need more AI credits in Google Flow to complete this request.`);
+  }
+
   const createSelectors = [
     "button:has-text('Create')",
     "button[aria-label='Create']",
     "button:has-text('arrow_forward')",
     // the circular right arrow button at the bottom right
     "button.send-button",
-    "button[type='submit']"
+    "button[type='submit']",
+    // Fallback for the orange error button
+    "button:has([data-icon*='warning'])",
+    "button:has([data-icon*='error'])",
+    "button:has-text('!')"
   ];
   let created = false;
   for (const sel of createSelectors) {
     try {
       const el = page.locator(sel).first();
-      // Ensure the button is enabled before clicking
-      if (await el.isVisible({ timeout: 2000 }) && await el.isEnabled()) {
-        await el.click();
-        created = true;
+      // If it exists, click it (even if disabled) to trigger any error tooltips
+      if (await el.isVisible({ timeout: 2000 })) {
+        await el.click({ force: true });
+        created = await el.isEnabled(); 
         break;
       }
     } catch { }
   }
+
+  await humanDelay(1000, 2000);
+  outOfCredits = await page.evaluate(() => document.body.innerText.includes('You need more AI credits'));
+  if (outOfCredits) {
+    throw new Error(`INSUFFICIENT_CREDITS: You need more AI credits in Google Flow to complete this request.`);
+  }
+
   if (!created) {
     // Fallback: press Enter on keyboard if focused in prompt
     try {
       await page.keyboard.press("Enter");
       created = true;
-      console.log(`[${STEP_NAME}] [Seg ${segIdx}] Flow create button not found, pressed Enter.`);
+      console.log(`[${STEP_NAME}] [Seg ${segIdx}] Flow create button not found or disabled, pressed Enter instead.`);
     } catch { }
   }
+
+  await humanDelay(1000, 2000);
+  outOfCredits = await page.evaluate(() => document.body.innerText.includes('You need more AI credits'));
+  if (outOfCredits) {
+    throw new Error(`INSUFFICIENT_CREDITS: You need more AI credits in Google Flow to complete this request.`);
+  }
+
   if (!created) {
     await debugScreenshot(page, `${label}_create_fail`);
     throw new Error(`[Seg ${segIdx}] Could not click Create.`);
@@ -521,7 +545,12 @@ async function stitchSegments(segmentPaths, outputPath) {
  * @param {BrowserContext} context      - Playwright browser context
  * @param {string[]}      videoPrompts - Array of transition prompts (one per frame pair)
  */
-export async function createVideo(context, videoPrompts = []) {
+export async function createVideo(context, videoPrompts, logger) {
+  const log = (msg) => {
+    if (logger) logger.log(msg);
+    else console.log(`[${STEP_NAME}] ${msg}`);
+  };
+  videoPrompts = videoPrompts || [];
   if (!context) throw new Error("context is required");
 
   const framesDir = path.resolve(process.cwd(), FRAMES_DIR);
