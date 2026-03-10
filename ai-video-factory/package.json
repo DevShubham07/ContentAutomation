@@ -9,7 +9,8 @@
     "cli": "node index.js",
     "login": "node scripts/login.js",
     "login:bb": "node scripts/login-bb.js",
-    "setup:context": "node scripts/setup-context.js"
+    "setup:context": "node scripts/setup-context.js",
+    "debug:flow": "node scripts/debug-flow.js"
   },
   "dependencies": {
     "@browserbasehq/sdk": "^2.7.0",

@@ -12,54 +12,83 @@ function formatFrameIndex(index) {
 }
 
 /**
- * Wait for Gemini to finish generating images in the response.
+ * Wait for Gemini to finish generating an image in the LATEST response.
+ * Instead of counting all images on the page (unreliable), this:
+ * 1. Waits for the loading indicator to disappear
+ * 2. Checks the LAST model response for a large image
  */
-async function waitForGeminiResponse(page, expectedImageCount = 1, timeoutMs = GENERATION_TIMEOUT_MS) {
+async function waitForGeminiResponse(page, _expectedImageCount = 1, timeoutMs = GENERATION_TIMEOUT_MS) {
   const start = Date.now();
   const POLL_MS = 3_000;
 
-  console.log(`[${STEP_NAME}] Waiting for Gemini response (need ${expectedImageCount} generated image(s))...`);
+  console.log(`[${STEP_NAME}] Waiting for Gemini response...`);
 
   while (Date.now() - start < timeoutMs) {
-    const result = await page.evaluate((expected) => {
-      const imgs = document.querySelectorAll("img");
-
-      // Count all generated images on the page
-      let generatedCount = 0;
-
-      for (const img of imgs) {
-        const src = img.src || "";
-        if (img.naturalWidth < 100 || img.naturalHeight < 100) continue;
-        if (src.includes("avatar") || src.includes("icon") || src.includes("logo")) continue;
-        if (src.includes("data:image/svg")) continue;
-        if (
-          src.includes("googleusercontent.com") ||
-          src.includes("gstatic.com") ||
-          src.includes("ggpht.com") ||
-          src.includes("lh3.google") ||
-          (img.naturalWidth >= 200 && img.naturalHeight >= 200)
-        ) {
-          generatedCount++;
-        }
+    const result = await page.evaluate(() => {
+      // Check if Gemini is still loading/streaming
+      // Common selectors: loading dots, spinner, "thinking" indicator
+      const loadingSelectors = [
+        '.loading-indicator', '.thinking', '[aria-label*="Loading"]',
+        '.model-response-loading', 'mat-progress-bar',
+        '.response-streaming', '[class*="loading"]',
+      ];
+      for (const sel of loadingSelectors) {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null) return 'loading';
       }
 
       // Check if Gemini refused
-      const bodyText = document.body.innerText || "";
+      const bodyText = document.body.innerText || '';
       if (
         bodyText.includes("I can't generate") ||
         bodyText.includes("I'm not able to generate") ||
-        bodyText.includes("unable to create")
+        bodyText.includes("unable to create") ||
+        bodyText.includes("I'm unable to")
       ) {
-        return "refused";
+        return 'refused';
       }
 
-      return generatedCount >= expected ? "done" : "waiting";
-    }, expectedImageCount);
+      // Find the LAST model response container
+      // Gemini uses turns — each response is in a container with model attribution
+      const allTurns = document.querySelectorAll(
+        'model-response, .model-response-text, [data-turn-role="model"], message-content'
+      );
+      const lastTurn = allTurns.length > 0 ? allTurns[allTurns.length - 1] : null;
 
-    if (result === "refused") {
-      throw new Error("Gemini refused to generate the image");
+      // Also try a broader approach: find the last container with a large image
+      const searchRoot = lastTurn || document;
+      const imgs = searchRoot.querySelectorAll('img');
+
+      for (const img of imgs) {
+        if (img.naturalWidth >= 200 && img.naturalHeight >= 200) {
+          const src = img.src || '';
+          if (src.includes('avatar') || src.includes('icon') || src.includes('logo')) continue;
+          if (src.includes('data:image/svg')) continue;
+          return 'done';
+        }
+      }
+
+      // Broader fallback: check ALL images on page for any new large generated image
+      const allImgs = document.querySelectorAll('img');
+      let largeCount = 0;
+      for (const img of allImgs) {
+        if (img.naturalWidth >= 300 && img.naturalHeight >= 300) {
+          const src = img.src || '';
+          if (src.includes('avatar') || src.includes('icon') || src.includes('logo')) continue;
+          if (src.includes('data:image/svg')) continue;
+          largeCount++;
+        }
+      }
+      // If there are large images on the page, consider it done
+      if (largeCount > 0) return 'done';
+
+      return 'waiting';
+    });
+
+    if (result === 'refused') {
+      throw new Error('Gemini refused to generate the image');
     }
-    if (result === "done") {
+    if (result === 'done') {
       console.log(`[${STEP_NAME}] Image found in response.`);
       await humanDelay(3000, 5000);
       return;
@@ -72,25 +101,29 @@ async function waitForGeminiResponse(page, expectedImageCount = 1, timeoutMs = G
     await new Promise((r) => setTimeout(r, POLL_MS));
   }
 
-  console.warn(`[${STEP_NAME}] Timed out after ${timeoutMs / 1000}s`);
+  // Don't throw — we'll try to extract whatever we can
+  console.warn(`[${STEP_NAME}] Timed out after ${timeoutMs / 1000}s, will attempt extraction anyway`);
 }
 
 /**
- * Extract the best (largest) generated image URL from the page,
- * excluding any URLs in the provided set (already downloaded).
+ * Extract the generated image URL from the page.
+ * Looks at ALL large images and picks the best one not in excludeUrls.
  */
 async function extractImageUrl(page, excludeUrls = new Set()) {
   const excludeArray = Array.from(excludeUrls);
   return page.evaluate(({ excludeArray }) => {
-    const imgs = document.querySelectorAll("img");
+    const imgs = document.querySelectorAll('img');
     let bestUrl = null;
     let bestSize = 0;
 
     for (const img of imgs) {
-      const src = img.src || "";
-      if (img.naturalWidth < 100 || img.naturalHeight < 100) continue;
-      if (src.includes("avatar") || src.includes("icon") || src.includes("logo")) continue;
-      if (src.includes("data:image/svg")) continue;
+      const src = img.src || '';
+      // Skip tiny images
+      if (img.naturalWidth < 200 || img.naturalHeight < 200) continue;
+      // Skip UI elements
+      if (src.includes('avatar') || src.includes('icon') || src.includes('logo')) continue;
+      if (src.includes('data:image/svg')) continue;
+      if (src.includes('emoji') || src.includes('flag')) continue;
       // Skip already-downloaded images
       if (excludeArray.some((u) => src === u)) continue;
 

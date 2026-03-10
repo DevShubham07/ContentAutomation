@@ -15,7 +15,10 @@ const STABILIZATION_ROUNDS = 3;   // text must be unchanged for this many checks
 const STABILIZATION_INTERVAL_MS = 2_000;
 const PLAN_PATH = "./assets/plan.json";
 
-const FRAME_COUNT = 2;
+const FRAME_COUNT = 3;
+const VIDEO_COUNT = FRAME_COUNT - 1; // 2 videos between 3 frames
+const VIDEO_DURATION_S = 8; // each Flow video is ~8 seconds
+const TOTAL_DURATION_S = VIDEO_COUNT * VIDEO_DURATION_S; // 16 seconds total
 
 const PROMPT = (theme) => `Output ONLY valid JSON, no other text or markdown. No code fences, no explanation.
 
@@ -23,18 +26,23 @@ You are a creative Instagram Reels content creator. The user will give you a rou
 
 User's idea: ${theme}
 
-You need to produce content for a short Instagram Reel (about 6 seconds). The reel will be made by:
-1. Generating 2 KEY IMAGES (the FIRST frame and the LAST frame of the reel)
-2. A video will be interpolated between these 2 images to create smooth motion
-3. A voiceover narration will play over the video
+You need to produce content for a short Instagram Reel (about ${TOTAL_DURATION_S} seconds). The reel will be made by:
+1. Generating ${FRAME_COUNT} KEY IMAGES (portrait 9:16) that represent key moments in the reel
+2. Between each consecutive pair of images, a video will be interpolated (${VIDEO_COUNT} videos total, ${VIDEO_DURATION_S}s each)
+3. The videos will be stitched together into one seamless ${TOTAL_DURATION_S}-second reel
+4. An emotional Hindi voiceover will play over the final video
 
 Generate a JSON object with exactly:
 1. "framePrompts": array of exactly ${FRAME_COUNT} strings:
-   - framePrompts[0] = detailed image generation prompt for the OPENING/FIRST frame
-   - framePrompts[1] = detailed image generation prompt for the CLOSING/LAST frame
-   Both prompts should describe the same scene/subject but at different moments in time, so smooth video interpolation is possible between them. Be extremely descriptive about lighting, colors, camera angle, composition, and mood. Use cinematic language.
-2. "videoPrompt": a single string describing the motion/transition that should happen between the first and last frame (e.g. "slow zoom in as the sun sets and colors shift from golden to deep purple")
-3. "audioPrompt": a single string for the voiceover narration — short, punchy, Instagram-style caption energy. 1-2 sentences max.
+   - framePrompts[0] = OPENING frame — the hook that grabs attention
+   - framePrompts[1] = MIDDLE frame — the emotional peak or turning point
+   - framePrompts[2] = CLOSING frame — the satisfying conclusion
+   All prompts should describe the same scene/subject at different moments in time, so smooth video interpolation is possible between consecutive frames. Be extremely descriptive about lighting, colors, camera angle, composition, and mood. Use cinematic language.
+2. "videoPrompts": array of exactly ${VIDEO_COUNT} strings:
+   - videoPrompts[0] = motion/transition from frame 1 to frame 2 (e.g. "camera slowly pushes in as...")
+   - videoPrompts[1] = motion/transition from frame 2 to frame 3
+   Each should describe camera movement, subject motion, and how the scene evolves.
+3. "audioScript": a single string — an emotional, traditional, heart-touching Hindi voiceover script. Exactly ${TOTAL_DURATION_S} seconds when spoken. Write in Devanagari Hindi. It should feel like a storytelling narration — poetic, warm, and deeply emotional. NOT a translation of English, but authentic Hindi poetry/prose.
 
 Return only the raw JSON object.`;
 
@@ -133,12 +141,23 @@ function validatePlan(plan) {
   if (!Array.isArray(plan.framePrompts) || plan.framePrompts.length !== FRAME_COUNT) {
     throw new Error(`Plan must have framePrompts array with exactly ${FRAME_COUNT} items`);
   }
-  if (typeof plan.audioPrompt !== "string") {
-    throw new Error("Plan must have audioPrompt string");
+  if (!Array.isArray(plan.videoPrompts) || plan.videoPrompts.length !== VIDEO_COUNT) {
+    // Backwards compat: if old single videoPrompt exists, convert it
+    if (typeof plan.videoPrompt === "string") {
+      plan.videoPrompts = [plan.videoPrompt, plan.videoPrompt];
+      console.warn(`[${STEP_NAME}] Converted legacy videoPrompt to videoPrompts array.`);
+    } else {
+      throw new Error(`Plan must have videoPrompts array with exactly ${VIDEO_COUNT} items`);
+    }
   }
-  if (typeof plan.videoPrompt !== "string") {
-    console.warn(`[${STEP_NAME}] Warning: videoPrompt missing, using default.`);
-    plan.videoPrompt = "Smooth cinematic transition between the two frames";
+  if (typeof plan.audioScript !== "string" || plan.audioScript.length < 10) {
+    // Fallback: use audioPrompt if audioScript is missing
+    if (typeof plan.audioPrompt === "string" && plan.audioPrompt.length >= 10) {
+      plan.audioScript = plan.audioPrompt;
+      console.warn(`[${STEP_NAME}] Using audioPrompt as audioScript fallback.`);
+    } else {
+      throw new Error("Plan must have audioScript string (Hindi voiceover, at least 10 chars)");
+    }
   }
   return plan;
 }

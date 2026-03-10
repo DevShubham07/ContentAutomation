@@ -198,14 +198,29 @@ export async function runPipeline(jobId, theme, broadcast) {
     clearAbortRequest(jobId);
 
     const currentJob = getJob(jobId);
-    const startIndex =
+    const resolvedTheme = (theme || currentJob?.theme || "").trim();
+    if (!resolvedTheme) {
+      throw new Error("Theme is required");
+    }
+
+    // ── SKIP_TO_STEP: jump directly to a specific step ──
+    const skipToStep = (process.env.SKIP_TO_STEP || "").trim().toLowerCase();
+    let startIndex =
       currentJob?.status === "paused" && Number.isInteger(currentJob?.stepIndex) && currentJob.stepIndex >= 0
         ? currentJob.stepIndex
         : 0;
 
-    const resolvedTheme = (theme || currentJob?.theme || "").trim();
-    if (!resolvedTheme) {
-      throw new Error("Theme is required");
+    if (skipToStep && STEP_ORDER.includes(skipToStep)) {
+      startIndex = STEP_ORDER.indexOf(skipToStep);
+      log(`SKIP_TO_STEP="${skipToStep}" — jumping to step index ${startIndex}`);
+
+      // Load existing plan.json so downstream steps have data
+      const planPath = path.resolve(process.cwd(), "./assets/plan.json");
+      if (await fs.pathExists(planPath)) {
+        const existingPlan = await fs.readJson(planPath);
+        updateJob(jobId, { "data.gptJson": existingPlan });
+        log(`Loaded existing plan.json (${existingPlan.framePrompts?.length} frames)`);
+      }
     }
 
     updateJob(jobId, {
@@ -330,8 +345,8 @@ export async function runPipeline(jobId, theme, broadcast) {
         progressAfter: 70,
         run: async () => {
           log("Stage: Creating Video...");
-          const videoPrompt = plan?.videoPrompt || "Smooth cinematic transition between the two frames";
-          await createVideo(flowContext, videoPrompt);
+          const videoPrompts = plan?.videoPrompts || ["Smooth cinematic transition"];
+          await createVideo(flowContext, videoPrompts);
           const videoPath = path.resolve(process.cwd(), VIDEO_PATH);
           updateJob(jobId, { "data.videoPath": videoPath });
           broadcast(jobId, STAGES.VIDEO, { videoPath });
@@ -347,7 +362,8 @@ export async function runPipeline(jobId, theme, broadcast) {
         run: async () => {
           if (!plan) throw new Error("Missing plan data before audio generation");
           log("Stage: Generating Audio...");
-          await generateAudio(elevenContext, plan.audioPrompt);
+          const audioText = plan.audioScript || plan.audioPrompt || "";
+          await generateAudio(elevenContext, audioText);
           const audioPath = path.resolve(process.cwd(), AUDIO_PATH);
           updateJob(jobId, { "data.audioPath": audioPath });
           broadcast(jobId, STAGES.AUDIO, { audioPath });
